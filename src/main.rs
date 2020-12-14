@@ -124,11 +124,21 @@ fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, ParamError> {
     Ok(ret)
 }
 
+fn exit_error(message: Option<String>) -> ! {
+    let mut code = 0;
+    if let Some(msg) = message {
+        error!("{}", msg);
+        code = 127;
+    }
+
+    std::process::exit(code);
+}
+
 #[async_std::main]
 async fn main() {
     env_logger::init();
 
-    let matches = clap::App::new("Simple port scanner")
+    let app = clap::App::new("Simple port scanner")
         .version("0.0.1")
         .about("Scans ports")
         .arg(
@@ -180,38 +190,47 @@ async fn main() {
             .takes_value(true)
             .required(false)
             .help("Write output as JSON into given file, - to write to stdout")
-        )
-        .get_matches();
+        );
+
+    let matches = match app.get_matches_safe() {
+        Ok(m) => m,
+        Err(e) => match e.kind {
+            clap::ErrorKind::HelpDisplayed | clap::ErrorKind::VersionDisplayed => {
+                println!("{}", e.message);
+                exit_error(None);
+            }
+            _ => exit_error(Some(e.message)),
+        },
+    };
 
     let addr = match parse_addresses(matches.value_of("address").unwrap()) {
         Ok(a) => a,
         Err(p) => {
-            error!("Unable to parse address(es): {}", p);
-            return;
+            exit_error(Some(format!("Unable to parse target address(es): {}", p)));
         }
     };
 
     let batch_count: usize = match matches.value_of("batch-count").unwrap().parse() {
         Ok(c) => c,
         Err(e) => {
-            error!("Unable to parse number of concurrent scans: {}", e);
-            return;
+            exit_error(Some(format!(
+                "Unable to parse number of concurrent scans: {}",
+                e
+            )));
         }
     };
 
     let range = match ports::PortRange::try_from(matches.value_of("ports").unwrap()) {
         Ok(r) => r,
         Err(e) => {
-            error!("Unable to parse port range: {}", e);
-            return;
+            exit_error(Some(format!("Unable to parse port range: {}", e)));
         }
     };
 
     let timeout: u64 = match matches.value_of("timeout").unwrap().parse() {
         Ok(t) => t,
         Err(e) => {
-            error!("Unable to parse timeout value: {}", e);
-            return;
+            exit_error(Some(format!("Unable to parse timeout value: {}", e)));
         }
     };
 
