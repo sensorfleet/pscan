@@ -1,1 +1,0 @@
-[{"host":"192.168.1.145","open_ports":[22],"closed":99,"filtered":0},{"host":"192.168.1.1","open_ports":[22,53,80],"closed":97,"filtered":0},{"host":"192.168.1.242","open_ports":[22],"closed":49,"filtered":50}]
