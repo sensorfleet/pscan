@@ -1,7 +1,6 @@
 use async_std::future;
 use async_std::io::ErrorKind;
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
-use async_std::prelude::*;
 use async_std::sync::Arc;
 use async_std::sync::RwLock;
 use async_std::sync::Sender;
@@ -96,10 +95,11 @@ pub struct ScanRange {
 
 impl ScanRange {
     // Create range to scan from given set of IP addresses and port range
-    pub fn create(addrs: &[IpCidr], range: PortRange) -> Self {
+    // `excludes` should contains addresses which should not be scanned
+    pub fn create(addrs: &[IpCidr], range: PortRange, excludes: &[IpAddr]) -> Self {
         let mut items = Vec::with_capacity(addrs.len());
         for a in addrs {
-            for addrit in a.iter() {
+            for addrit in a.iter().filter(|a| !excludes.contains(a)) {
                 items.push(RangeItem {
                     addr: addrit,
                     range: range.clone(),
@@ -115,6 +115,10 @@ impl ScanRange {
     fn concurrent_scans(&mut self, scans: u16) {
         // XXX assumes same range of ports are to be scanned for each host.
         // this is true for now
+        if self.items.is_empty() {
+            // we are not going to scan, no need to adjust
+            return;
+        }
         let port_count = self.items[0].range.port_count() as u16;
         let ppt = port_count / scans;
         let step = {
