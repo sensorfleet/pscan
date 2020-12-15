@@ -76,7 +76,8 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
 enum ParamError {
     Message(String),
     IntError(std::num::ParseIntError),
-    AddrError(cidr::NetworkParseError),
+    NetParseError(cidr::NetworkParseError),
+    AddrError(std::net::AddrParseError),
 }
 
 impl fmt::Display for ParamError {
@@ -85,6 +86,7 @@ impl fmt::Display for ParamError {
             ParamError::Message(m) => write!(f, "{}", m),
             ParamError::IntError(e) => write!(f, "{}", e),
             ParamError::AddrError(e) => write!(f, "{}", e),
+            ParamError::NetParseError(e) => write!(f, "{}", e),
         }
     }
 }
@@ -95,6 +97,7 @@ impl std::error::Error for ParamError {
             ParamError::Message(_) => None,
             ParamError::IntError(e) => Some(e),
             ParamError::AddrError(e) => Some(e),
+            ParamError::NetParseError(e) => Some(e),
         }
     }
 }
@@ -106,6 +109,12 @@ impl From<std::num::ParseIntError> for ParamError {
 
 impl From<cidr::NetworkParseError> for ParamError {
     fn from(e: cidr::NetworkParseError) -> Self {
+        ParamError::NetParseError(e)
+    }
+}
+
+impl From<std::net::AddrParseError> for ParamError {
+    fn from(e: std::net::AddrParseError) -> Self {
         ParamError::AddrError(e)
     }
 }
@@ -126,6 +135,21 @@ fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, ParamError> {
     } else {
         for a in val.split(',') {
             ret.push(a.trim().parse::<cidr::IpCidr>()?);
+        }
+    }
+    Ok(ret)
+}
+
+// parse comman separated IP addresses. Expecting plain IP addresses, not
+// networks in address/mask
+fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, ParamError> {
+    let mut ret = Vec::new();
+    if !val.contains(',') {
+        let addr = val.trim().parse::<IpAddr>()?;
+        ret.push(addr)
+    } else {
+        for a in val.split(',') {
+            ret.push(a.trim().parse::<IpAddr>()?);
         }
     }
     Ok(ret)
@@ -155,6 +179,14 @@ async fn main() {
                 .takes_value(true)
                 .required(true)
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
+        )
+        .arg(
+            clap::Arg::with_name("exclude")
+                .long("exclude")
+                .short("e")
+                .takes_value(true)
+                .required(false)
+                .help("Comma -separated list of addresses to exclude from scanning")
         )
         .arg(
             clap::Arg::with_name("ports")
@@ -243,6 +275,15 @@ async fn main() {
 
     let output_file = matches.value_of("json").map(|s| s.to_owned());
 
+    let excludes = if let Some(excl) = matches.value_of("exclude") {
+        match parse_single_addresses(excl) {
+            Ok(val) => val,
+            Err(e) => exit_error(Some(format!("Unable to parse addresses to exlcude: {}", e))),
+        }
+    } else {
+        Vec::new()
+    };
+
     let mut params: scanner::ScanParameters = Default::default();
     params.concurrent_scans = batch_count;
     params.enable_adaptive_timing = matches.is_present("adaptive-timing");
@@ -255,7 +296,7 @@ async fn main() {
     {
         let scan = scanner::Scanner::new(params);
 
-        col.join(scan.scan(scanner::ScanRange::create(&addr, range), tx))
+        col.join(scan.scan(scanner::ScanRange::create(&addr, range, &excludes), tx))
             .await;
     } else {
         error!("Could not spawn scanner")
