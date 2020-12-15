@@ -52,16 +52,23 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
     } else {
         print!("Scan complete:\n ");
         let mut down_hosts = 0;
-        for (_a, p) in host_infos {
+        let mut no_open_ports = 0;
+        for (_a, p) in &host_infos {
             if p.is_down() {
                 down_hosts += 1;
                 continue;
             } else if p.open_port_count() == 0 {
+                no_open_ports += 1;
                 continue;
             }
             println!("{}\n", p);
         }
-        println!("{} hosts down", down_hosts);
+        println!(
+            "{} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
+            host_infos.len(),
+            no_open_ports,
+            down_hosts
+        );
     }
 }
 
