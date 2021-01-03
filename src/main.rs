@@ -1,10 +1,9 @@
 #[macro_use]
 extern crate log;
 
+use async_std::channel::Receiver;
 use async_std::net::IpAddr;
 use async_std::prelude::*;
-use async_std::sync;
-use async_std::sync::Receiver;
 use async_std::task::Builder;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -289,7 +288,7 @@ async fn main() {
     params.enable_adaptive_timing = matches.is_present("adaptive-timing");
     params.wait_timeout = Duration::from_millis(timeout);
 
-    let (tx, rx) = sync::channel(10);
+    let (tx, rx) = async_std::channel::bounded(10);
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
         .spawn(collect_results(rx, output_file))
