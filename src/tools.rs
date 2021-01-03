@@ -1,18 +1,19 @@
-use async_std::sync::{channel, Arc, Receiver, Sender};
+use async_std::channel;
+use async_std::sync::Arc;
 
 /// Simple counting semaphore.
 /// Use Semaphore::new() to get new instance with given capacity,
 /// Semaphore::wait() returns SemHandle instance once access is granted and
 /// SemHandle::signal() is used to signal the semaphore.
 pub struct Semaphore {
-    ch: Sender<u16>,
-    sig: Arc<Receiver<u16>>,
+    ch: channel::Sender<u16>,
+    sig: Arc<channel::Receiver<u16>>,
 }
 
 impl Semaphore {
     /// Create new instance of the counting semaphore with given capacity
     pub fn new(capacity: usize) -> Self {
-        let (s, r) = channel(capacity);
+        let (s, r) = channel::bounded(capacity);
         Semaphore {
             ch: s,
             sig: Arc::new(r),
@@ -23,7 +24,7 @@ impl Semaphore {
     /// Returns instance of SemHandle which needs to be signaled by
     /// calling SemHandle::signal() once resource is released.
     pub async fn wait(&self) -> SemHandle {
-        self.ch.send(1).await;
+        self.ch.send(1).await.unwrap();
         trace!("waited, c={}", self.ch.len());
         SemHandle {
             sig: self.sig.clone(),
@@ -33,7 +34,7 @@ impl Semaphore {
 
 /// Handle returned by Semaphore::wait().
 pub struct SemHandle {
-    sig: Arc<Receiver<u16>>,
+    sig: Arc<channel::Receiver<u16>>,
 }
 
 impl SemHandle {

@@ -1,9 +1,9 @@
+use async_std::channel::Sender;
 use async_std::future;
 use async_std::io::ErrorKind;
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use async_std::sync::Arc;
 use async_std::sync::RwLock;
-use async_std::sync::Sender;
 use async_std::task;
 use cidr::{Cidr, IpCidr};
 use std::fmt;
@@ -351,21 +351,29 @@ impl ScanType {
             }
             PortState::HostDown() => {
                 info!("Remote host is down");
-                tx.send(ScanResult {
-                    address: sa.ip(),
-                    port: 0,
-                    state: PortState::HostDown(),
-                })
-                .await;
+                if let Err(e) = tx
+                    .send(ScanResult {
+                        address: sa.ip(),
+                        port: 0,
+                        state: PortState::HostDown(),
+                    })
+                    .await
+                {
+                    warn!("Result channel closed! ({})", e)
+                }
                 return Err(ScanError::Down(format!("Host {} is down", sa.ip())));
             }
         };
-        tx.send(ScanResult {
-            address: sa.ip(),
-            port: sa.port(),
-            state,
-        })
-        .await;
+        if let Err(_e) = tx
+            .send(ScanResult {
+                address: sa.ip(),
+                port: sa.port(),
+                state,
+            })
+            .await
+        {
+            warn!("Result channel closed!")
+        }
         Ok(next_timeout_guess)
     }
 }
