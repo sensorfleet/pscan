@@ -5,6 +5,10 @@ use async_std::channel::Receiver;
 use async_std::net::IpAddr;
 use async_std::prelude::*;
 use async_std::task::Builder;
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook_async_std::Signals;
+use std::sync::{atomic::AtomicBool, Arc};
+
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
@@ -164,6 +168,20 @@ fn exit_error(message: Option<String>) -> ! {
     std::process::exit(code);
 }
 
+async fn sighandler(signals: Signals, flag: Arc<AtomicBool>) {
+    let mut s = signals.fuse();
+
+    while let Some(sig) = s.next().await {
+        match sig {
+            SIGINT | SIGTERM => {
+                debug!("Received termination signal, setting flag");
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            _ => warn!("Received unexpected signal"),
+        }
+    }
+}
+
 #[async_std::main]
 async fn main() {
     env_logger::init();
@@ -289,15 +307,38 @@ async fn main() {
     params.wait_timeout = Duration::from_millis(timeout);
 
     let (tx, rx) = async_std::channel::bounded(10);
+
+    let signals = match Signals::new(&[SIGINT, SIGTERM]) {
+        Ok(h) => h,
+        Err(e) => exit_error(Some(format!("Unable to register signal handler: {}", e))),
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let handle = signals.handle();
+
+    let sig_h = async_std::task::spawn(sighandler(signals, Arc::clone(&stop)));
+
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
         .spawn(collect_results(rx, output_file))
     {
         let scan = scanner::Scanner::new(params);
 
-        col.join(scan.scan(scanner::ScanRange::create(&addr, range, &excludes), tx))
-            .await;
+        col.join(scan.scan(
+            scanner::ScanRange::create(&addr, range, &excludes, Arc::clone(&stop)),
+            tx,
+        ))
+        .await;
     } else {
         error!("Could not spawn scanner")
     }
+    handle.close();
+    debug!(
+        "Waiting for sighandler task, stop is {}",
+        stop.load(std::sync::atomic::Ordering::SeqCst)
+    );
+    sig_h.await;
+    if stop.load(std::sync::atomic::Ordering::SeqCst) {
+        std::process::exit(2);
+    }
+    std::process::exit(0);
 }
