@@ -216,7 +216,7 @@ async fn main() {
         .arg(
             clap::Arg::with_name("timeout")
                 .long("timeout")
-                .short("t")
+                .short("T")
                 .takes_value(true)
                 .default_value("1000")
                 .required(false)
