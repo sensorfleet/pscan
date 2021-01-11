@@ -6,9 +6,9 @@ use async_std::sync::Arc;
 use async_std::sync::RwLock;
 use async_std::task;
 use cidr::{Cidr, IpCidr};
-use std::fmt;
 use std::iter::Iterator;
 use std::time::{Duration, Instant};
+use std::{fmt, sync::atomic::AtomicBool};
 
 use crate::ports::{PortIterator, PortRange};
 use crate::tools;
@@ -91,12 +91,19 @@ struct RangeItem {
 pub struct ScanRange {
     items: Vec<RangeItem>, // hosts and ports in them to scan
     idx: usize,            // index of next item to scan
+    stop: Arc<AtomicBool>,
 }
 
 impl ScanRange {
     // Create range to scan from given set of IP addresses and port range
-    // `excludes` should contains addresses which should not be scanned
-    pub fn create(addrs: &[IpCidr], range: PortRange, excludes: &[IpAddr]) -> Self {
+    // `excludes` should contains addresses which should not be scanned.
+    // `stop` flag can be used to stop scanning by setting to to true.
+    pub fn create(
+        addrs: &[IpCidr],
+        range: PortRange,
+        excludes: &[IpAddr],
+        stop: Arc<AtomicBool>,
+    ) -> Self {
         let mut items = Vec::with_capacity(addrs.len());
         for a in addrs {
             for addrit in a.iter().filter(|a| !excludes.contains(a)) {
@@ -107,7 +114,11 @@ impl ScanRange {
                 })
             }
         }
-        ScanRange { items, idx: 0 }
+        ScanRange {
+            items,
+            idx: 0,
+            stop,
+        }
     }
 
     // set the number of concurrent scans we plan to run.
@@ -150,7 +161,7 @@ impl Iterator for ScanRange {
     type Item = ScanIter;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.idx < self.items.len() {
+        while !self.stop.load(std::sync::atomic::Ordering::SeqCst) && self.idx < self.items.len() {
             if let Some(ctx) = self.items[self.idx].timeout.try_read() {
                 // we can use try_read here, if we can not acquire the lock
                 // the scan will not proceed anyway, this just speeds things up
@@ -164,6 +175,7 @@ impl Iterator for ScanRange {
                     addr: self.items[self.idx].addr,
                     ports: range,
                     a_timeout: self.items[self.idx].timeout.clone(),
+                    stop: Arc::clone(&self.stop),
                 });
             }
             self.idx += 1;
@@ -178,12 +190,16 @@ pub struct ScanIter {
     addr: IpAddr,
     ports: PortIterator,
     a_timeout: Arc<RwLock<Timeout>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl Iterator for ScanIter {
     type Item = SocketAddr;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
         match self.ports.next() {
             Some(port) => Some(SocketAddr::new(self.addr, port)),
             None => None,
