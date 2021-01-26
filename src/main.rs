@@ -5,6 +5,7 @@ use async_std::channel::Receiver;
 use async_std::net::IpAddr;
 use async_std::prelude::*;
 use async_std::task::Builder;
+use scanner::ScanParameters;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_async_std::Signals;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -56,15 +57,15 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
         print!("Scan complete:\n ");
         let mut down_hosts = 0;
         let mut no_open_ports = 0;
-        for (_a, p) in &host_infos {
-            if p.is_down() {
+        for info in host_infos.values() {
+            if info.is_down() {
                 down_hosts += 1;
                 continue;
-            } else if p.open_port_count() == 0 {
+            } else if info.open_port_count() == 0 {
                 no_open_ports += 1;
                 continue;
             }
-            println!("{}\n", p);
+            println!("{}\n", info);
         }
         println!(
             "{} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
@@ -301,10 +302,11 @@ async fn main() {
         Vec::new()
     };
 
-    let mut params: scanner::ScanParameters = Default::default();
-    params.concurrent_scans = batch_count;
-    params.enable_adaptive_timing = matches.is_present("adaptive-timing");
-    params.wait_timeout = Duration::from_millis(timeout);
+    let params: scanner::ScanParameters = ScanParameters {
+        concurrent_scans: batch_count,
+        enable_adaptive_timing: matches.is_present("adaptive-timing"),
+        wait_timeout: Duration::from_millis(timeout),
+    };
 
     let (tx, rx) = async_std::channel::bounded(10);
 
