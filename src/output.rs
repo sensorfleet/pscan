@@ -83,8 +83,8 @@ impl HostInfo {
 
     pub fn get_delays(&self) -> (Duration, Duration) {
         (
-            self.min_delay.unwrap_or(Duration::from_secs(0)),
-            self.max_delay.unwrap_or(Duration::from_secs(0)),
+            self.min_delay.unwrap_or_else(|| Duration::from_secs(0)),
+            self.max_delay.unwrap_or_else(|| Duration::from_secs(0)),
         )
     }
 }
