@@ -60,10 +60,6 @@ impl HostInfo {
         self.open_ports.len()
     }
 
-    pub fn closed_port_count(&self) -> usize {
-        self.closed_count as usize
-    }
-
     pub fn add_delay(&mut self, delay: Duration) {
         if let Some(d) = self.min_delay {
             if delay < d {
