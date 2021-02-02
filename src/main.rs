@@ -46,7 +46,7 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
     if let Some(fname) = output_file {
         let opens: Vec<&output::HostInfo> = host_infos
             .values()
-            .filter(|h| !h.is_down() && (h.open_port_count() > 0 || h.closed_port_count() > 0))
+            .filter(|h| !h.is_down() && h.open_port_count() > 0)
             // .filter(|h| !h.is_down())
             .collect();
 
