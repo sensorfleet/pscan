@@ -5,15 +5,13 @@ use async_std::channel::Receiver;
 use async_std::net::IpAddr;
 use async_std::prelude::*;
 use async_std::task::Builder;
-use scanner::ScanParameters;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_async_std::Signals;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt;
-use std::time::Duration;
+mod config;
 mod output;
 mod ports;
 mod scanner;
@@ -76,89 +74,6 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
     }
 }
 
-#[derive(Debug)]
-enum ParamError {
-    Message(String),
-    IntError(std::num::ParseIntError),
-    NetParseError(cidr::NetworkParseError),
-    AddrError(std::net::AddrParseError),
-}
-
-impl fmt::Display for ParamError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParamError::Message(m) => write!(f, "{}", m),
-            ParamError::IntError(e) => write!(f, "{}", e),
-            ParamError::AddrError(e) => write!(f, "{}", e),
-            ParamError::NetParseError(e) => write!(f, "{}", e),
-        }
-    }
-}
-
-impl std::error::Error for ParamError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ParamError::Message(_) => None,
-            ParamError::IntError(e) => Some(e),
-            ParamError::AddrError(e) => Some(e),
-            ParamError::NetParseError(e) => Some(e),
-        }
-    }
-}
-impl From<std::num::ParseIntError> for ParamError {
-    fn from(e: std::num::ParseIntError) -> Self {
-        ParamError::IntError(e)
-    }
-}
-
-impl From<cidr::NetworkParseError> for ParamError {
-    fn from(e: cidr::NetworkParseError) -> Self {
-        ParamError::NetParseError(e)
-    }
-}
-
-impl From<std::net::AddrParseError> for ParamError {
-    fn from(e: std::net::AddrParseError) -> Self {
-        ParamError::AddrError(e)
-    }
-}
-
-impl From<&str> for ParamError {
-    fn from(m: &str) -> Self {
-        ParamError::Message(m.to_owned())
-    }
-}
-
-fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, ParamError> {
-    let mut ret = Vec::new();
-
-    if !val.contains(',') {
-        // assume single address
-        let addr = val.trim().parse::<cidr::IpCidr>()?;
-        ret.push(addr);
-    } else {
-        for a in val.split(',') {
-            ret.push(a.trim().parse::<cidr::IpCidr>()?);
-        }
-    }
-    Ok(ret)
-}
-
-// parse comman separated IP addresses. Expecting plain IP addresses, not
-// networks in address/mask
-fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, ParamError> {
-    let mut ret = Vec::new();
-    if !val.contains(',') {
-        let addr = val.trim().parse::<IpAddr>()?;
-        ret.push(addr)
-    } else {
-        for a in val.split(',') {
-            ret.push(a.trim().parse::<IpAddr>()?);
-        }
-    }
-    Ok(ret)
-}
-
 fn exit_error(message: Option<String>) -> ! {
     let mut code = 0;
     if let Some(msg) = message {
@@ -191,7 +106,7 @@ async fn main() {
         .version("0.0.1")
         .about("Scans ports")
         .arg(
-            clap::Arg::with_name("address")
+            clap::Arg::with_name(config::ARG_ADDRESS_NAME)
                 .long("target")
                 .short("t")
                 .takes_value(true)
@@ -199,7 +114,7 @@ async fn main() {
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
         )
         .arg(
-            clap::Arg::with_name("exclude")
+            clap::Arg::with_name(config::ARG_EXCLUDE_NAME)
                 .long("exclude")
                 .short("e")
                 .takes_value(true)
@@ -207,7 +122,7 @@ async fn main() {
                 .help("Comma -separated list of addresses to exclude from scanning")
         )
         .arg(
-            clap::Arg::with_name("ports")
+            clap::Arg::with_name(config::ARG_PORTS_NAME)
                 .long("ports")
                 .short("p")
                 .takes_value(true)
@@ -216,7 +131,7 @@ async fn main() {
                 .help("Ports to scan"),
         )
         .arg(
-            clap::Arg::with_name("batch-count")
+            clap::Arg::with_name(config::ARG_CONCURRENT_COUNT_NAME)
                 .long("concurrent-scans")
                 .short("b")
                 .takes_value(true)
@@ -233,7 +148,7 @@ async fn main() {
                 .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
         )
         .arg(
-            clap::Arg::with_name("timeout")
+            clap::Arg::with_name(config::ARG_TIMEOUT_NAME)
                 .long("timeout")
                 .short("T")
                 .takes_value(true)
@@ -241,7 +156,7 @@ async fn main() {
                 .required(false)
                 .help("Timeout in ms to wait for response before determening port as closed/firewalled")
         )
-        .arg(clap::Arg::with_name("json")
+        .arg(clap::Arg::with_name(config::ARG_OUTPUT_FILE_NAME)
             .long("json")
             .short("j")
             .takes_value(true)
@@ -260,53 +175,17 @@ async fn main() {
         },
     };
 
-    let addr = match parse_addresses(matches.value_of("address").unwrap()) {
-        Ok(a) => a,
-        Err(p) => {
-            exit_error(Some(format!("Unable to parse target address(es): {}", p)));
-        }
-    };
+    let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
 
-    let batch_count: usize = match matches.value_of("batch-count").unwrap().parse() {
+    let mut cfg = match config::Config::try_from(matches) {
+        Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
         Ok(c) => c,
-        Err(e) => {
-            exit_error(Some(format!(
-                "Unable to parse number of concurrent scans: {}",
-                e
-            )));
-        }
     };
 
-    let range = match ports::PortRange::try_from(matches.value_of("ports").unwrap()) {
-        Ok(r) => r,
-        Err(e) => {
-            exit_error(Some(format!("Unable to parse port range: {}", e)));
-        }
-    };
-
-    let timeout: u64 = match matches.value_of("timeout").unwrap().parse() {
-        Ok(t) => t,
-        Err(e) => {
-            exit_error(Some(format!("Unable to parse timeout value: {}", e)));
-        }
-    };
-
-    let output_file = matches.value_of("json").map(|s| s.to_owned());
-
-    let excludes = if let Some(excl) = matches.value_of("exclude") {
-        match parse_single_addresses(excl) {
-            Ok(val) => val,
-            Err(e) => exit_error(Some(format!("Unable to parse addresses to exlcude: {}", e))),
-        }
-    } else {
-        Vec::new()
-    };
-
-    let params: scanner::ScanParameters = ScanParameters {
-        concurrent_scans: batch_count,
-        enable_adaptive_timing: matches.is_present("adaptive-timing"),
-        wait_timeout: Duration::from_millis(timeout),
-    };
+    let mut params: scanner::ScanParameters = cfg.as_params();
+    if adaptive_timeout_enabled {
+        params.enable_adaptive_timing = true;
+    }
 
     let (tx, rx) = async_std::channel::bounded(10);
 
@@ -321,12 +200,17 @@ async fn main() {
 
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
-        .spawn(collect_results(rx, output_file))
+        .spawn(collect_results(rx, cfg.output_file()))
     {
         let scan = scanner::Scanner::new(params);
 
         col.join(scan.scan(
-            scanner::ScanRange::create(&addr, range, &excludes, Arc::clone(&stop)),
+            scanner::ScanRange::create(
+                &cfg.addrs(),
+                cfg.ports(),
+                &cfg.exludes(),
+                Arc::clone(&stop),
+            ),
             tx,
         ))
         .await;
