@@ -106,11 +106,11 @@ async fn main() {
         .version("0.0.1")
         .about("Scans ports")
         .arg(
-            clap::Arg::with_name(config::ARG_ADDRESS_NAME)
+            clap::Arg::with_name(config::ARG_TARGET_NAME)
                 .long("target")
                 .short("t")
                 .takes_value(true)
-                .required(true)
+                .required(false)
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
         )
         .arg(
@@ -131,7 +131,7 @@ async fn main() {
                 .help("Ports to scan"),
         )
         .arg(
-            clap::Arg::with_name(config::ARG_CONCURRENT_COUNT_NAME)
+            clap::Arg::with_name(config::ARG_CONCURRENT_SCANS_NAME)
                 .long("concurrent-scans")
                 .short("b")
                 .takes_value(true)
@@ -156,12 +156,19 @@ async fn main() {
                 .required(false)
                 .help("Timeout in ms to wait for response before determening port as closed/firewalled")
         )
-        .arg(clap::Arg::with_name(config::ARG_OUTPUT_FILE_NAME)
+        .arg(clap::Arg::with_name(config::ARG_JSON_NAME)
             .long("json")
             .short("j")
             .takes_value(true)
             .required(false)
             .help("Write output as JSON into given file, - to write to stdout")
+        )
+        .arg(clap::Arg::with_name(config::ARG_CONFIG_FILE_NAME)
+            .long("config")
+            .short("C")
+            .takes_value(true)
+            .required(false)
+            .help("Read configuration from given JSON file")
         );
 
     let matches = match app.get_matches_safe() {
@@ -177,10 +184,34 @@ async fn main() {
 
     let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
 
-    let mut cfg = match config::Config::try_from(matches) {
-        Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
-        Ok(c) => c,
+    let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE_NAME) {
+        // First load configuration from given file
+        match config::Config::from_json_file(
+            matches.value_of(config::ARG_CONFIG_FILE_NAME).unwrap(),
+        ) {
+            Ok(c) => Some(c),
+            Err(e) => exit_error(Some(format!("Error while reading configuration: {}", e))),
+        }
+    } else {
+        None
     };
+
+    let mut cfg = if let Some(cf) = cfg_from_file {
+        match cf.override_with(&matches) {
+            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
+            Ok(c) => c,
+        }
+    } else {
+        match config::Config::try_from(matches) {
+            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
+            Ok(c) => c,
+        }
+    };
+
+    // make sure configuration is good
+    if let Err(e) = cfg.verify() {
+        exit_error(Some(format!("Configuration error: {}", e)))
+    }
 
     let mut params: scanner::ScanParameters = cfg.as_params();
     if adaptive_timeout_enabled {
@@ -200,13 +231,13 @@ async fn main() {
 
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
-        .spawn(collect_results(rx, cfg.output_file()))
+        .spawn(collect_results(rx, cfg.json()))
     {
         let scan = scanner::Scanner::new(params);
 
         col.join(scan.scan(
             scanner::ScanRange::create(
-                &cfg.addrs(),
+                &cfg.target(),
                 cfg.ports(),
                 &cfg.exludes(),
                 Arc::clone(&stop),
