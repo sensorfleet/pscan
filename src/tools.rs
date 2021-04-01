@@ -45,8 +45,8 @@ impl SemHandle {
             panic!("Signaling empty semaphore")
         }
         trace!("Signaling c={}", self.sig.len());
-        if let Err(e) = self.sig.try_recv() {
-            panic!(format!("Unexpected receive error on signal: {}", e))
+        if self.sig.try_recv().is_err() {
+            panic!("Unexpected error on signal receive");
         }
     }
 }

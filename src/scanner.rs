@@ -323,7 +323,7 @@ async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, S
 // available scans we can perform.
 // In future, there is hopefully more than one.
 pub enum ScanType {
-    TCP,
+    Tcp,
 }
 
 // minimum timeout value to report for adaptive timeout
@@ -340,7 +340,7 @@ impl ScanType {
         conn_timeout: Duration,
     ) -> Result<Duration, ScanError> {
         let state = match self {
-            ScanType::TCP => try_port(sa, conn_timeout).await?,
+            ScanType::Tcp => try_port(sa, conn_timeout).await?,
         };
         let next_timeout_guess = match state {
             PortState::Open(d) | PortState::Closed(d) => {
@@ -423,7 +423,7 @@ impl Scanner {
     pub fn new(params: ScanParameters) -> Self {
         Scanner {
             sem: tools::Semaphore::new(params.concurrent_scans),
-            typ: ScanType::TCP,
+            typ: ScanType::Tcp,
             params,
         }
     }
