@@ -246,7 +246,7 @@ impl Config {
     }
 
     pub fn exludes(&mut self) -> Vec<IpAddr> {
-        self.excludes.take().unwrap_or(Vec::new())
+        self.excludes.take().unwrap_or_default()
     }
 
     pub fn json(&mut self) -> Option<String> {
