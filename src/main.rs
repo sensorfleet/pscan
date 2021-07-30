@@ -37,6 +37,7 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
                 info.add_filtered_port(res.port)
             }
             scanner::PortState::HostDown() => info.mark_down(),
+            scanner::PortState::Retry() => info.mark_down(),
         }
     }
     trace!("Collector stopping");
@@ -169,6 +170,13 @@ async fn main() {
             .takes_value(true)
             .required(false)
             .help("Read configuration from given JSON file")
+        )
+        .arg(clap::Arg::with_name(config::ARG_RETRY_ON_ERROR_NAME)
+            .long("retry-on-error")
+            .short("R")
+            .takes_value(false)
+            .required(false)
+            .help("Retry scan a few times on (possible transient) network error")
         );
 
     let matches = match app.get_matches_safe() {
@@ -216,6 +224,10 @@ async fn main() {
     let mut params: scanner::ScanParameters = cfg.as_params();
     if adaptive_timeout_enabled {
         params.enable_adaptive_timing = true;
+    }
+
+    if params.retry_on_error {
+        info!("Retry on error set")
     }
 
     let (tx, rx) = async_std::channel::bounded(10);
