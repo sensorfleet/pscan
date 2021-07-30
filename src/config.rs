@@ -10,6 +10,7 @@ pub const ARG_CONCURRENT_SCANS_NAME: &str = "concurrent-scans";
 pub const ARG_TIMEOUT_NAME: &str = "timeout";
 pub const ARG_JSON_NAME: &str = "json";
 pub const ARG_CONFIG_FILE_NAME: &str = "config";
+pub const ARG_RETRY_ON_ERROR_NAME: &str = "retry-on-error";
 
 #[derive(Debug)]
 pub enum Error {
@@ -43,6 +44,12 @@ impl std::error::Error for Error {
 impl From<std::num::ParseIntError> for Error {
     fn from(e: std::num::ParseIntError) -> Self {
         Error::IntError(e)
+    }
+}
+
+impl From<std::str::ParseBoolError> for Error {
+    fn from(e: std::str::ParseBoolError) -> Self {
+        Error::Message(format!("{}", e))
     }
 }
 
@@ -154,7 +161,7 @@ where
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(deserialize_with = "deserialize_target")]
+    #[serde(default, deserialize_with = "deserialize_target")]
     target: Option<Vec<cidr::IpCidr>>,
     #[serde(default, deserialize_with = "deserialize_excludes")]
     excludes: Option<Vec<IpAddr>>,
@@ -165,6 +172,8 @@ pub struct Config {
     #[serde(default, deserialize_with = "deserialize_timeout")]
     timeout: Option<Duration>,
     json: Option<String>,
+    #[serde(rename(deserialize = "retry-on-error"))]
+    retry_on_error: Option<bool>,
 }
 
 // helper for parsing value  from command line parameter
@@ -195,6 +204,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             Ok(Duration::from_millis(s.parse()?))
         })?;
         let json = value.value_of(ARG_JSON_NAME).map(|a| a.to_owned());
+        let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR_NAME));
 
         Ok(Config {
             target,
@@ -203,6 +213,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             concurrent_scans,
             timeout,
             json,
+            retry_on_error,
         })
     }
 }
@@ -238,6 +249,7 @@ impl Config {
             concurrent_scans: self.concurrent_scans.unwrap(),
             wait_timeout: self.timeout.unwrap(),
             enable_adaptive_timing: false,
+            retry_on_error: self.retry_on_error.unwrap(),
         }
     }
 
@@ -280,6 +292,13 @@ impl Config {
             Ok(Duration::from_millis(s.parse()?))
         })?;
         let json = get_or_override(self.json, matches, ARG_JSON_NAME, |s| Ok(s.to_owned()))?;
+        let retry_on_error = {
+            if matches.is_present(ARG_RETRY_ON_ERROR_NAME) {
+                Some(true)
+            } else {
+                self.retry_on_error.or(Some(false))
+            }
+        };
 
         Ok(Config {
             target,
@@ -288,6 +307,7 @@ impl Config {
             concurrent_scans,
             timeout,
             json,
+            retry_on_error,
         })
     }
 
