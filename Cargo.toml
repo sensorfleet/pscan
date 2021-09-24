@@ -16,4 +16,5 @@ serde_json = {version = "1.0"}
 serde = { version="1.0", features = ["derive"]}
 signal-hook-async-std = { version="0.2"}
 signal-hook = {version="0.3"}
+futures = {version="0.3"}
 

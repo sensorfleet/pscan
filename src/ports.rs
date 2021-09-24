@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::fmt;
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 
@@ -27,6 +28,15 @@ impl Prange {
         match self {
             Prange::Range((min, max)) => max - min + 1,
             Prange::Atom(_) => 1,
+        }
+    }
+}
+
+impl fmt::Debug for Prange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Range(arg0) => write!(f, "[{}-{}]", arg0.0, arg0.1),
+            Self::Atom(arg0) => write!(f, "[{}]", arg0),
         }
     }
 }
@@ -76,10 +86,6 @@ impl PortRange {
     pub fn adjust_step(&mut self, step: u16) {
         self.step = step;
     }
-
-    pub fn get_step(&self) -> u16 {
-        self.step
-    }
 }
 
 fn parse_single_range(val: &str) -> Result<Prange, Error> {
@@ -123,7 +129,7 @@ impl TryFrom<&str> for PortRange {
 
 fn select_range(range: &Prange, start: u16, step: u16) -> (u16, u16) {
     let end = {
-        if start as u32 + (step - 1) as u32 > range.max() as u32 {
+        if start as u32 + (step - 1) as u32 >= range.max() as u32 {
             range.max()
         } else {
             start + step - 1
@@ -197,6 +203,12 @@ impl Iterator for PortIterator {
             return next;
         }
         None
+    }
+}
+
+impl fmt::Debug for PortIterator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.ranges.iter()).finish()
     }
 }
 

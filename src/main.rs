@@ -14,6 +14,7 @@ use std::convert::TryFrom;
 mod config;
 mod output;
 mod ports;
+mod range;
 mod scanner;
 mod tools;
 
@@ -245,15 +246,10 @@ async fn main() {
         .name("collector".to_owned())
         .spawn(collect_results(rx, cfg.json()))
     {
-        let scan = scanner::Scanner::new(params);
+        let scan = scanner::Scanner::create(params, stop.clone());
 
         col.join(scan.scan(
-            scanner::ScanRange::create(
-                &cfg.target(),
-                cfg.ports(),
-                &cfg.exludes(),
-                Arc::clone(&stop),
-            ),
+            range::ScanRange::create(&cfg.target(), &cfg.exludes(), cfg.ports()),
             tx,
         ))
         .await;
