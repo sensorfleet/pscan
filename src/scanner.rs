@@ -3,15 +3,15 @@ use async_std::future;
 use async_std::io::ErrorKind;
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use async_std::sync::Arc;
-use async_std::sync::RwLock;
-use async_std::task;
-use cidr::{Cidr, IpCidr};
-use std::iter::Iterator;
+use async_std::task::{self, JoinHandle};
+use futures::stream::{FuturesUnordered, StreamExt};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
-use crate::ports::{PortIterator, PortRange};
-use crate::tools;
+use crate::ports::PortIterator;
+use crate::range::{HostIterator, ScanRange};
+use crate::tools::{SemHandle, Semaphore};
 
 // OS -specific error codes for error conditions
 #[cfg(target_os = "macos")]
@@ -32,6 +32,8 @@ mod os_errcodes {
 
 static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
 
+static MAX_STRIPE_LEN: u16 = 100;
+
 // Detected state of a port
 pub enum PortState {
     Open(Duration),        // port is open
@@ -40,206 +42,6 @@ pub enum PortState {
     CallTImeout(Duration), // connection was aborted due our timeout
     HostDown(),            // Remote host is likely down
     Retry(),
-}
-
-// Timeout keeps track of timeouts for connections.
-// it can be updated if connection was established or if it was rejected.
-// this allows to tune further timeouts.
-// Information will be kept for a given host for some range of ports.
-struct Timeout {
-    // current value
-    val: Duration,
-    // for calculating average
-    sum: u64,
-    count: u64,
-    // will be set to false if we think host is down
-    up: bool,
-}
-
-impl Timeout {
-    // Create new timeout with given timeout value
-    fn new(default: Duration) -> Self {
-        Timeout {
-            val: default,
-            sum: 0,
-            count: 0,
-            up: true,
-        }
-    }
-
-    // update timeout with new detected timeout value
-    fn set(&mut self, val: Duration) {
-        self.sum += val.as_millis() as u64;
-        self.count += 1;
-        self.val = Duration::from_millis(self.sum / self.count);
-        info!("Adaptive timeout updated to {}ms", self.val.as_millis());
-    }
-
-    // get the current timeout value
-    fn get(&self) -> Option<Duration> {
-        if !self.up {
-            None
-        } else {
-            Some(self.val)
-        }
-    }
-
-    // mark the host to be down
-    fn mark_down(&mut self) {
-        self.up = false
-    }
-}
-
-// RangeItem represents a host and range of ports to scan
-struct RangeItem {
-    addr: IpAddr,                  // host we are scanning
-    range: PortRange,              // range of ports to scan
-    timeout: Arc<RwLock<Timeout>>, // adaptive timeout value for this scan
-}
-
-// ScanRange contains information about all hosts and ports we are about to scan
-pub struct ScanRange {
-    items: Vec<RangeItem>, // hosts and ports in them to scan
-    idx: usize,            // index of next item to scan
-    stop: Arc<AtomicBool>,
-}
-
-impl ScanRange {
-    // Create range to scan from given set of IP addresses and port range
-    // `excludes` should contains addresses which should not be scanned.
-    // `stop` flag can be used to stop scanning by setting to to true.
-    pub fn create(
-        addrs: &[IpCidr],
-        range: PortRange,
-        excludes: &[IpAddr],
-        stop: Arc<AtomicBool>,
-    ) -> Self {
-        let mut items = Vec::with_capacity(addrs.len());
-        for a in addrs {
-            for addrit in a.iter().filter(|a| !excludes.contains(a)) {
-                items.push(RangeItem {
-                    addr: addrit,
-                    range: range.clone(),
-                    timeout: Arc::new(RwLock::new(Timeout::new(DEFAULT_CONNECTION_TIMEOUT))),
-                })
-            }
-        }
-        ScanRange {
-            items,
-            idx: 0,
-            stop,
-        }
-    }
-
-    // set the number of concurrent scans we plan to run.
-    // This allows us to tune the number of ports to scan on each iteration
-    fn concurrent_scans(&mut self, scans: u16) {
-        // XXX assumes same range of ports are to be scanned for each host.
-        // this is true for now
-        if self.items.is_empty() {
-            // we are not going to scan, no need to adjust
-            return;
-        }
-        let port_count = self.items[0].range.port_count() as u16;
-        let ppt = port_count / scans;
-        let step = {
-            if ppt < 1 {
-                1
-            } else {
-                self.items[0].range.get_step().min(ppt)
-            }
-        };
-        info!(
-            "Running with {} concurrent scans, {} ports per iteration",
-            scans, step,
-        );
-
-        for it in self.items.iter_mut() {
-            it.range.adjust_step(step);
-        }
-    }
-
-    // set the default timeout for scans
-    fn default_timeout(&mut self, default: Duration) {
-        for it in self.items.iter_mut() {
-            it.timeout = Arc::new(RwLock::new(Timeout::new(default)));
-        }
-    }
-}
-
-impl Iterator for ScanRange {
-    type Item = ScanIter;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while !self.stop.load(std::sync::atomic::Ordering::SeqCst) && self.idx < self.items.len() {
-            if let Some(ctx) = self.items[self.idx].timeout.try_read() {
-                // we can use try_read here, if we can not acquire the lock
-                // the scan will not proceed anyway, this just speeds things up
-                if !ctx.up {
-                    self.idx += 1;
-                    continue;
-                }
-            }
-            if let Some(range) = self.items[self.idx].range.next() {
-                return Some(ScanIter {
-                    addr: self.items[self.idx].addr,
-                    ports: range,
-                    a_timeout: self.items[self.idx].timeout.clone(),
-                    stop: Arc::clone(&self.stop),
-                });
-            }
-            self.idx += 1;
-        }
-        None
-    }
-}
-
-// Iterator which returns SocketAddress to scan first.
-// Allows also to tune the adaptive timeout for host being scanned.
-pub struct ScanIter {
-    addr: IpAddr,
-    ports: PortIterator,
-    a_timeout: Arc<RwLock<Timeout>>,
-    stop: Arc<AtomicBool>,
-}
-
-impl Iterator for ScanIter {
-    type Item = SocketAddr;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
-            return None;
-        }
-        match self.ports.next() {
-            Some(port) => Some(SocketAddr::new(self.addr, port)),
-            None => None,
-        }
-    }
-}
-
-impl ScanIter {
-    // update timeout estimate
-    async fn update_timeout(&mut self, to: Duration) {
-        info!(
-            "Updating timeout for {} with {}ms",
-            self.addr,
-            to.as_millis()
-        );
-        let mut l_timeout = self.a_timeout.write().await;
-        l_timeout.set(to);
-    }
-
-    // get initial timeout value to use for this scan round
-    async fn get_initial_timeout(&self) -> Option<Duration> {
-        let l_timeout = self.a_timeout.read().await;
-        l_timeout.get()
-    }
-
-    // indicate that the host was detected to be down
-    async fn host_down(&mut self) {
-        let mut l_ctx = self.a_timeout.write().await;
-        l_ctx.mark_down();
-    }
 }
 
 // Scanning error
@@ -274,7 +76,7 @@ fn handle_other_error(
             } else if n == os_errcodes::OS_ERR_NET_UNREACH {
                 Ok(PortState::Retry())
             } else {
-                debug!("Connect returned error code: {}", n);
+                debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
                 Ok(PortState::Closed(connection_time))
             }
         })
@@ -284,13 +86,13 @@ fn handle_other_error(
 // Returns Ok(PortState) if a state of port could be determined, Err(ScanError)
 // if error occurred while scanning.
 async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, ScanError> {
-    debug!("Trying {}", sa);
+    trace!("Trying {}", sa);
     let start = Instant::now();
     let res = future::timeout(conn_timeout, TcpStream::connect(sa)).await;
     let c = match res {
         Ok(v) => v,
         Err(_) => {
-            debug!("Connection timed out");
+            trace!("Connection timed out");
             return Ok(PortState::CallTImeout(start.elapsed()));
         }
     };
@@ -313,19 +115,11 @@ async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, S
             Ok(PortState::Open(start.elapsed()))
         }
         Err(e) => {
-            debug!("Connection failed: {}", e);
+            trace!("Connection failed: {}", e);
             match e.kind() {
                 ErrorKind::TimedOut => Ok(PortState::ConnTimeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
-                ErrorKind::Other => handle_other_error(e, c_time),
-                _ => {
-                    warn!(
-                        "Connect returned error with Kind {:?}, errno {:?}",
-                        e.kind(),
-                        e.raw_os_error()
-                    );
-                    Ok(PortState::Closed(c_time))
-                }
+                _ => handle_other_error(e, c_time),
             }
         }
     }
@@ -362,7 +156,7 @@ impl ScanType {
                     // We have actual connection to the host
                     // Use the duration from that connection as best assumption
                     // of RTT and adjust the connection timeout with that
-                    debug!("RTT from last actual connect {}ms", d.as_millis());
+                    trace!("RTT from last actual connect {}ms", d.as_millis());
                     if d * 5 < MIN_TIMEOUT {
                         Some(MIN_TIMEOUT)
                     } else {
@@ -377,7 +171,7 @@ impl ScanType {
                 }
                 PortState::CallTImeout(d) => {
                     // we hit our own timeout, can not make adjustments
-                    debug!("Own timeout hit in {}ms", d.as_millis());
+                    trace!("Own timeout hit in {}ms", d.as_millis());
                     Some(conn_timeout)
                 }
                 PortState::HostDown() => {
@@ -431,6 +225,7 @@ impl ScanType {
     }
 }
 // parameters for whole scan operation
+#[derive(Clone, Copy)]
 pub struct ScanParameters {
     pub wait_timeout: Duration,       // Duration to wait for responses
     pub concurrent_scans: usize,      // number of concurrent tasks to run
@@ -449,78 +244,146 @@ impl Default for ScanParameters {
     }
 }
 
-// Scanner instance to run a scan
 pub struct Scanner {
-    sem: tools::Semaphore,  // semaphore to limit number of concurrent threads
-    typ: ScanType,          // scan type
-    params: ScanParameters, // parameters for scanning
+    sem: Semaphore,
+    r#type: ScanType,
+    params: ScanParameters,
+    stop: Arc<AtomicBool>,
 }
 
 impl Scanner {
-    // create new scanner instance with given parameters
-    pub fn new(params: ScanParameters) -> Self {
+    pub fn create(params: ScanParameters, stop: Arc<AtomicBool>) -> Scanner {
         Scanner {
-            sem: tools::Semaphore::new(params.concurrent_scans),
-            typ: ScanType::Tcp,
+            sem: Semaphore::new(params.concurrent_scans),
+            r#type: ScanType::Tcp,
             params,
+            stop,
         }
     }
 
-    // Run a scan for given range of hosts and ports. Send results using
-    // given sender.
-    pub async fn scan(self, mut range: ScanRange, tx: Sender<ScanResult>) {
-        let mut tasks = Vec::new();
+    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanResult>) {
+        let ports_per_thread = u16::max(
+            range.get_port_count() / self.params.concurrent_scans as u16,
+            1,
+        )
+        .min(MAX_STRIPE_LEN);
         let atx = Arc::new(tx);
-        range.concurrent_scans(self.params.concurrent_scans as u16);
-        range.default_timeout(self.params.wait_timeout);
+        debug!("Scanning with {} ports per stripe", ports_per_thread);
 
-        for mut item in range {
-            let h = self.sem.wait().await;
+        let mut waiters = FuturesUnordered::new();
+        for mut hostit in range.hosts() {
+            hostit.ports.adjust_step(ports_per_thread);
+            if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+                warn!("Stopping hostloop due to signal");
+                break;
+            }
+            let h = self.scan_host(hostit, atx.clone()).await;
+            waiters.push(task::spawn(h.wait()))
+        }
+        // all host tasks have been spawned
+        debug!("Waiting for all hosts to complete");
+        while let Some(()) = waiters.next().await {}
+    }
 
-            let typ = self.typ;
-            let tmp = atx.clone();
-            // get the initial value for timeout to use
-            let mut c_timeout = match item.get_initial_timeout().await {
-                Some(d) => d,
-                None => {
-                    // Host is determined to be down, no need to scan
-                    h.signal();
-                    continue;
-                }
-            };
-            let adaptive_timeout = self.params.enable_adaptive_timing;
-            let retry_on_error = self.params.retry_on_error;
-            let handle = task::spawn(async move {
-                let mut adjusted = false;
-                for sa in &mut item {
-                    match typ.cycle(sa, tmp.clone(), c_timeout, retry_on_error).await {
-                        Ok(adjusted_timeout) => {
-                            if adaptive_timeout && adjusted_timeout != c_timeout {
-                                c_timeout = adjusted_timeout;
-                                adjusted = true;
-                                trace!("Timeout adjusted to {}ms", c_timeout.as_millis());
-                            }
-                        }
-                        Err(e) => match e {
-                            ScanError::Down(msg) => {
-                                warn!("Terminating loop due fatal error: {}", msg);
-                                item.host_down().await;
-                                break;
-                            }
-                        },
-                    }
-                }
-                if adaptive_timeout && adjusted {
-                    // contribute to the common timeout
-                    item.update_timeout(c_timeout).await;
-                }
-                h.signal()
-            });
+    async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanResult>>) -> Host {
+        debug!("Starting to scan host {}", host.host);
+        let tasks = FuturesUnordered::new();
+        let ctx = HostContext {
+            up: Arc::new(AtomicBool::new(true)),
+            stop_signal: self.stop.clone(),
+            tx: tx.clone(),
+        };
+
+        for stripe in host.ports {
+            // this is the gatekeeper making sure we do not start too many
+            // concurrent tasks
+            let semh = self.sem.wait().await;
+            if !ctx.keep_running() {
+                // host down, no need to continue further
+                break;
+            }
+            let handle = task::spawn(scan_port_stripe(
+                host.host,
+                stripe,
+                self.r#type,
+                self.params,
+                semh,
+                ctx.clone(),
+            ));
             tasks.push(handle);
         }
-        trace!("Spawned tasks, waiting for them to finish");
-        for t in tasks {
-            t.await;
+        return Host {
+            addr: host.host,
+            tasks,
+            _context: ctx,
+        };
+    }
+}
+
+#[derive(Clone)]
+struct HostContext {
+    up: Arc<AtomicBool>,
+    stop_signal: Arc<AtomicBool>,
+    tx: Arc<Sender<ScanResult>>,
+    // max_timeout: Duration,
+}
+
+impl HostContext {
+    fn keep_running(&self) -> bool {
+        return self
+            .up
+            .fetch_and(!self.stop_signal.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+
+    fn host_down(&self) {
+        self.up.store(false, Ordering::SeqCst);
+    }
+}
+
+struct Host {
+    addr: IpAddr,
+    tasks: FuturesUnordered<JoinHandle<()>>,
+    _context: HostContext,
+}
+
+impl Host {
+    async fn wait(mut self) {
+        while let Some(()) = self.tasks.next().await {}
+        info!("Host {} scan complete", self.addr);
+    }
+}
+
+async fn scan_port_stripe(
+    addr: IpAddr,
+    stripe: PortIterator,
+    typ: ScanType,
+    params: ScanParameters,
+    sem: SemHandle,
+    ctx: HostContext,
+) {
+    debug!("Starting stripe {:?} for {}", stripe, addr);
+    for p in stripe {
+        if !ctx.keep_running() {
+            break;
+        }
+        let sa = SocketAddr::new(addr, p);
+        match typ
+            .cycle(
+                sa,
+                ctx.tx.clone(),
+                params.wait_timeout,
+                params.retry_on_error,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Terminating stripe for {} due to error: {}", addr, e);
+                ctx.host_down();
+                break;
+            }
         }
     }
+    sem.signal();
+    trace!("stripe complete for {}", addr)
 }
