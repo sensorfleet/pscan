@@ -36,12 +36,11 @@ static MAX_STRIPE_LEN: u16 = 100;
 
 // Detected state of a port
 pub enum PortState {
-    Open(Duration),        // port is open
-    Closed(Duration),      // port is closed
-    ConnTimeout(Duration), // TCP connection timeout occurred
-    CallTImeout(Duration), // connection was aborted due our timeout
-    HostDown(),            // Remote host is likely down
-    Retry(),
+    Open(Duration),    // port is open
+    Closed(Duration),  // port is closed
+    Timeout(Duration), // Did not get response withint timeout
+    HostDown(),        // Host was reported unreachable by OS
+    NetError(),        // Host could not be connected due network error
 }
 
 // Scanning error
@@ -74,7 +73,7 @@ fn handle_other_error(
             if n == os_errcodes::OS_ERR_HOST_DOWN {
                 Ok(PortState::HostDown())
             } else if n == os_errcodes::OS_ERR_NET_UNREACH {
-                Ok(PortState::Retry())
+                Ok(PortState::NetError())
             } else {
                 debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
                 Ok(PortState::Closed(connection_time))
@@ -89,35 +88,31 @@ async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, S
     trace!("Trying {}", sa);
     let start = Instant::now();
     let res = future::timeout(conn_timeout, TcpStream::connect(sa)).await;
+    let c_time = start.elapsed();
+
     let c = match res {
         Ok(v) => v,
         Err(_) => {
             trace!("Connection timed out");
-            return Ok(PortState::CallTImeout(start.elapsed()));
+            return Ok(PortState::Timeout(c_time));
         }
     };
-    let c_time = start.elapsed();
 
     trace!("connect() took {}ms", c_time.as_millis());
 
     match c {
         Ok(s) => {
             info!("port {} Connection succesfull", sa.port());
-            // if let Err(e) = s.write_all("FOO".as_bytes()).await {
-            //     warn!("Could not write: {}", e)
-            // } else {
-            //     warn!("Was able to write")
-            // }
             if let Err(e) = s.shutdown(Shutdown::Both) {
                 warn!("Unable to shutdown connection: {}", e)
             }
-            info!("Connection took {}ms", start.elapsed().as_millis());
-            Ok(PortState::Open(start.elapsed()))
+            info!("Connection took {}ms", c_time.as_millis());
+            Ok(PortState::Open(c_time))
         }
         Err(e) => {
             trace!("Connection failed: {}", e);
             match e.kind() {
-                ErrorKind::TimedOut => Ok(PortState::ConnTimeout(c_time)),
+                ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
                 _ => handle_other_error(e, c_time),
             }
@@ -133,7 +128,6 @@ pub enum ScanType {
 }
 
 // minimum timeout value to report for adaptive timeout
-static MIN_TIMEOUT: Duration = Duration::from_millis(25);
 
 impl ScanType {
     // Scan for single port in given host. Result will be sent
@@ -145,71 +139,41 @@ impl ScanType {
         tx: Arc<Sender<ScanResult>>,
         conn_timeout: Duration,
         retry_on_error: bool,
-    ) -> Result<Duration, ScanError> {
+    ) -> Result<Option<Duration>, ScanError> {
         let mut retry_count: i32 = 0;
         loop {
             let state = match self {
                 ScanType::Tcp => try_port(sa, conn_timeout).await?,
             };
-            let next_timeout_guess = match state {
-                PortState::Open(d) | PortState::Closed(d) => {
-                    // We have actual connection to the host
-                    // Use the duration from that connection as best assumption
-                    // of RTT and adjust the connection timeout with that
-                    trace!("RTT from last actual connect {}ms", d.as_millis());
-                    if d * 5 < MIN_TIMEOUT {
-                        Some(MIN_TIMEOUT)
-                    } else {
-                        Some(d * 5)
-                    }
-                }
-                PortState::ConnTimeout(d) => {
-                    // TCP connection timeout, the stack gave up, this is as
-                    // much we should wait in any case.
-                    debug!("TCP connection timeout in {}ms", d.as_millis());
-                    Some(d)
-                }
-                PortState::CallTImeout(d) => {
-                    // we hit our own timeout, can not make adjustments
-                    trace!("Own timeout hit in {}ms", d.as_millis());
-                    Some(conn_timeout)
-                }
+            let ret = match state {
+                PortState::Open(d) | PortState::Closed(d) => Ok(Some(d)),
+                PortState::Timeout(_) => Ok(None),
                 PortState::HostDown() => {
                     info!("Remote host is down");
-                    if let Err(e) = tx
-                        .send(ScanResult {
-                            address: sa.ip(),
-                            port: 0,
-                            state: PortState::HostDown(),
-                        })
-                        .await
-                    {
-                        warn!("Result channel closed! ({})", e)
+                    Err(ScanError::Down(format!("Host {} is down", sa.ip())))
+                }
+                PortState::NetError() => {
+                    if !retry_on_error {
+                        Err(ScanError::Down(format!(
+                            "Host {}, network error, marking down",
+                            sa.ip()
+                        )))
+                    } else {
+                        if retry_count > 5 {
+                            Err(ScanError::Down(format!(
+                                "Host {}, retried {} times, network error",
+                                sa.ip(),
+                                retry_count
+                            )))
+                        } else {
+                            info!("waiting 500ms before next retry (count {})", retry_count);
+                            retry_count += 1;
+                            task::sleep(Duration::from_millis(500)).await;
+                            continue;
+                        }
                     }
-                    return Err(ScanError::Down(format!("Host {} is down", sa.ip())));
                 }
-                PortState::Retry() => None,
             };
-            if next_timeout_guess.is_none() {
-                if !retry_on_error {
-                    return Err(ScanError::Down(format!(
-                        "Host {} could not be connected",
-                        sa.ip()
-                    )));
-                }
-                retry_count = retry_count + 1;
-                if retry_count > 5 {
-                    info!("Host {} retried enough", sa.ip());
-                    return Err(ScanError::Down(format!(
-                        "Host {} retried {} times",
-                        sa.ip(),
-                        retry_count
-                    )));
-                }
-                info!("waiting 500ms before next retry (count {})", retry_count);
-                task::sleep(Duration::from_millis(500)).await;
-                continue;
-            }
             if let Err(_e) = tx
                 .send(ScanResult {
                     address: sa.ip(),
@@ -220,7 +184,7 @@ impl ScanType {
             {
                 warn!("Result channel closed!")
             }
-            return Ok(next_timeout_guess.unwrap());
+            return ret;
         }
     }
 }

@@ -34,11 +34,9 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
                 info.add_closed_port(res.port);
                 info.add_delay(d);
             }
-            scanner::PortState::ConnTimeout(_) | scanner::PortState::CallTImeout(_) => {
-                info.add_filtered_port(res.port)
-            }
+            scanner::PortState::Timeout(_) => info.add_filtered_port(res.port),
             scanner::PortState::HostDown() => info.mark_down(),
-            scanner::PortState::Retry() => info.mark_down(),
+            scanner::PortState::NetError() => info.mark_down(),
         }
     }
     trace!("Collector stopping");
