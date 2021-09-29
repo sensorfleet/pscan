@@ -11,6 +11,7 @@ pub const ARG_TIMEOUT_NAME: &str = "timeout";
 pub const ARG_JSON_NAME: &str = "json";
 pub const ARG_CONFIG_FILE_NAME: &str = "config";
 pub const ARG_RETRY_ON_ERROR_NAME: &str = "retry-on-error";
+pub const ARG_TRY_COUNT: &str = "try-count";
 
 #[derive(Debug)]
 pub enum Error {
@@ -174,6 +175,8 @@ pub struct Config {
     json: Option<String>,
     #[serde(rename(deserialize = "retry-on-error"))]
     retry_on_error: Option<bool>,
+    #[serde(rename(deserialize = "try-count"))]
+    try_count: Option<usize>,
 }
 
 // helper for parsing value  from command line parameter
@@ -205,6 +208,8 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
         })?;
         let json = value.value_of(ARG_JSON_NAME).map(|a| a.to_owned());
         let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR_NAME));
+        let try_count =
+            parse_from_string(&value, ARG_TRY_COUNT, |s| s.parse().map_err(Error::from))?;
 
         Ok(Config {
             target,
@@ -214,6 +219,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             timeout,
             json,
             retry_on_error,
+            try_count,
         })
     }
 }
@@ -250,6 +256,7 @@ impl Config {
             wait_timeout: self.timeout.unwrap(),
             enable_adaptive_timing: false,
             retry_on_error: self.retry_on_error.unwrap(),
+            try_count: self.try_count.unwrap(),
         }
     }
 
@@ -299,6 +306,9 @@ impl Config {
                 self.retry_on_error.or(Some(false))
             }
         };
+        let try_count = get_or_override(self.try_count, matches, ARG_TRY_COUNT, |s| {
+            s.parse().map_err(Error::from)
+        })?;
 
         Ok(Config {
             target,
@@ -308,6 +318,7 @@ impl Config {
             timeout,
             json,
             retry_on_error,
+            try_count,
         })
     }
 
@@ -325,6 +336,16 @@ impl Config {
         }
         if self.concurrent_scans.is_none() {
             missing_fields.push("concurrent scanner count")
+        }
+        if let Some(c) = self.try_count {
+            if c <= 0 {
+                return Err(Error::Message(format!(
+                    "Invalid {} {}, expecting non-zero positive count",
+                    ARG_TRY_COUNT, c
+                )));
+            }
+        } else {
+            missing_fields.push(ARG_TRY_COUNT);
         }
 
         if !missing_fields.is_empty() {

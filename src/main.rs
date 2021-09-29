@@ -176,6 +176,13 @@ async fn main() {
             .takes_value(false)
             .required(false)
             .help("Retry scan a few times on (possible transient) network error")
+        ).arg(clap::Arg::with_name(config::ARG_TRY_COUNT)
+            .long("try-count")
+            .short("r")
+            .takes_value(true)
+            .required(false)
+            .default_value("2")
+            .help("Number of times to try a port which receives no response (including the initial try)")
         );
 
     let matches = match app.get_matches_safe() {

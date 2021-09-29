@@ -139,15 +139,29 @@ impl ScanType {
         tx: Arc<Sender<ScanResult>>,
         conn_timeout: Duration,
         retry_on_error: bool,
+        try_count: usize,
     ) -> Result<Option<Duration>, ScanError> {
-        let mut retry_count: i32 = 0;
+        let mut nr_of_tries: usize = 0;
         loop {
+            nr_of_tries += 1;
             let state = match self {
                 ScanType::Tcp => try_port(sa, conn_timeout).await?,
             };
             let ret = match state {
                 PortState::Open(d) | PortState::Closed(d) => Ok(Some(d)),
-                PortState::Timeout(_) => Ok(None),
+                PortState::Timeout(_) => {
+                    if nr_of_tries >= try_count {
+                        Ok(None)
+                    } else {
+                        debug!(
+                            "Retrying port {} due to timeout, tried {}/{}",
+                            sa.port(),
+                            nr_of_tries,
+                            try_count
+                        );
+                        continue;
+                    }
+                }
                 PortState::HostDown() => {
                     info!("Remote host is down");
                     Err(ScanError::Down(format!("Host {} is down", sa.ip())))
@@ -159,15 +173,18 @@ impl ScanType {
                             sa.ip()
                         )))
                     } else {
-                        if retry_count > 5 {
+                        if nr_of_tries >= try_count {
                             Err(ScanError::Down(format!(
-                                "Host {}, retried {} times, network error",
+                                "Host {}, tried {}/{} times, network error",
                                 sa.ip(),
-                                retry_count
+                                nr_of_tries,
+                                try_count
                             )))
                         } else {
-                            info!("waiting 500ms before next retry (count {})", retry_count);
-                            retry_count += 1;
+                            info!(
+                                "waiting 500ms before next retry ({}/{} tries)",
+                                nr_of_tries, try_count
+                            );
                             task::sleep(Duration::from_millis(500)).await;
                             continue;
                         }
@@ -195,6 +212,7 @@ pub struct ScanParameters {
     pub concurrent_scans: usize,      // number of concurrent tasks to run
     pub enable_adaptive_timing: bool, // should adaptive timeout be used
     pub retry_on_error: bool,         // should we retry on network error
+    pub try_count: usize,             // number of times to try if there is no response
 }
 
 impl Default for ScanParameters {
@@ -204,6 +222,7 @@ impl Default for ScanParameters {
             concurrent_scans: 100,
             enable_adaptive_timing: false,
             retry_on_error: false,
+            try_count: 2,
         }
     }
 }
@@ -337,6 +356,7 @@ async fn scan_port_stripe(
                 ctx.tx.clone(),
                 params.wait_timeout,
                 params.retry_on_error,
+                params.try_count,
             )
             .await
         {
