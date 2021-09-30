@@ -135,3 +135,26 @@ pub async fn write_json_into(
 
     Ok(())
 }
+
+pub fn write_results_to_stdout(infos: &[HostInfo]) -> Result<(), async_std::io::Error> {
+    print!("Scan complete:\n ");
+    let mut down_hosts = 0;
+    let mut no_open_ports = 0;
+    for info in infos {
+        if info.is_down() {
+            down_hosts += 1;
+            continue;
+        } else if info.open_port_count() == 0 {
+            no_open_ports += 1;
+            continue;
+        }
+        println!("{}\n", info);
+    }
+    println!(
+        "{} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
+        infos.len(),
+        no_open_ports,
+        down_hosts
+    );
+    return Ok(());
+}

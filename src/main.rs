@@ -11,6 +11,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
 mod config;
 mod output;
 mod ports;
@@ -18,7 +19,7 @@ mod range;
 mod scanner;
 mod tools;
 
-async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<String>) {
+async fn collect_results(rx: Receiver<scanner::ScanResult>) -> Vec<output::HostInfo> {
     let mut host_infos: HashMap<IpAddr, output::HostInfo> = HashMap::new();
 
     while let Ok(res) = rx.recv().await {
@@ -40,37 +41,21 @@ async fn collect_results(rx: Receiver<scanner::ScanResult>, output_file: Option<
         }
     }
     trace!("Collector stopping");
+    return host_infos.drain().map(|(_, v)| v).collect();
+}
 
+async fn output_results(
+    infos: &[output::HostInfo],
+    output_file: Option<String>,
+) -> Result<(), async_std::io::Error> {
     if let Some(fname) = output_file {
-        let opens: Vec<&output::HostInfo> = host_infos
-            .values()
+        let opens: Vec<&output::HostInfo> = infos
+            .iter()
             .filter(|h| !h.is_down() && h.open_port_count() > 0)
-            // .filter(|h| !h.is_down())
             .collect();
-
-        if let Err(e) = output::write_json_into(&fname, opens).await {
-            println!("Unable to write JSON output: {}", e);
-        }
+        output::write_json_into(&fname, opens).await
     } else {
-        print!("Scan complete:\n ");
-        let mut down_hosts = 0;
-        let mut no_open_ports = 0;
-        for info in host_infos.values() {
-            if info.is_down() {
-                down_hosts += 1;
-                continue;
-            } else if info.open_port_count() == 0 {
-                no_open_ports += 1;
-                continue;
-            }
-            println!("{}\n", info);
-        }
-        println!(
-            "{} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
-            host_infos.len(),
-            no_open_ports,
-            down_hosts
-        );
+        output::write_results_to_stdout(infos)
     }
 }
 
@@ -249,15 +234,19 @@ async fn main() {
 
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
-        .spawn(collect_results(rx, cfg.json()))
+        .spawn(collect_results(rx))
     {
         let scan = scanner::Scanner::create(params, stop.clone());
-
-        col.join(scan.scan(
-            range::ScanRange::create(&cfg.target(), &cfg.exludes(), cfg.ports()),
-            tx,
-        ))
-        .await;
+        let (infos, _) = col
+            .join(scan.scan(
+                range::ScanRange::create(&cfg.target(), &cfg.exludes(), cfg.ports()),
+                tx,
+            ))
+            .await;
+        // print resuts now that scan is complete
+        if let Err(er) = output_results(&infos, cfg.json()).await {
+            error!("Unable to output results: {}", er);
+        }
     } else {
         error!("Could not spawn scanner")
     }
