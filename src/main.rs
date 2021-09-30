@@ -19,25 +19,36 @@ mod range;
 mod scanner;
 mod tools;
 
-async fn collect_results(rx: Receiver<scanner::ScanResult>) -> Vec<output::HostInfo> {
+async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<output::HostInfo> {
     let mut host_infos: HashMap<IpAddr, output::HostInfo> = HashMap::new();
 
     while let Ok(res) = rx.recv().await {
-        let info = host_infos
-            .entry(res.address)
-            .or_insert_with(|| output::HostInfo::create(res.address));
-        match res.state {
-            scanner::PortState::Open(d) => {
-                info.add_open_port(res.port);
-                info.add_delay(d);
+        match res {
+            scanner::ScanInfo::PortStatus(status) => {
+                let info = host_infos
+                    .entry(status.address)
+                    .or_insert_with(|| output::HostInfo::create(status.address));
+                match status.state {
+                    scanner::PortState::Open(d) => {
+                        info.add_open_port(status.port);
+                        info.add_delay(d);
+                    }
+                    scanner::PortState::Closed(d) => {
+                        info.add_closed_port(status.port);
+                        info.add_delay(d);
+                    }
+                    scanner::PortState::Timeout(_) => info.add_filtered_port(status.port),
+                    scanner::PortState::HostDown() => info.mark_down(),
+                    scanner::PortState::NetError() => info.mark_down(),
+                }
             }
-            scanner::PortState::Closed(d) => {
-                info.add_closed_port(res.port);
-                info.add_delay(d);
+            scanner::ScanInfo::HostScanned(addr) => {
+                if verbose {
+                    if let Some(info) = host_infos.get(&addr) {
+                        output::write_single_host_info(info)
+                    }
+                }
             }
-            scanner::PortState::Timeout(_) => info.add_filtered_port(res.port),
-            scanner::PortState::HostDown() => info.mark_down(),
-            scanner::PortState::NetError() => info.mark_down(),
         }
     }
     trace!("Collector stopping");
@@ -168,7 +179,12 @@ async fn main() {
             .required(false)
             .default_value("2")
             .help("Number of times to try a port which receives no response (including the initial try)")
-        );
+        ).arg(clap::Arg::with_name("verbose")
+            .long("verbose")
+            .short("v")
+            .takes_value(false)
+            .required(false)
+            .help("Verbose output"));
 
     let matches = match app.get_matches_safe() {
         Ok(m) => m,
@@ -182,6 +198,7 @@ async fn main() {
     };
 
     let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
+    let verbose = matches.is_present("verbose");
 
     let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE_NAME) {
         // First load configuration from given file
@@ -234,7 +251,7 @@ async fn main() {
 
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
-        .spawn(collect_results(rx))
+        .spawn(collect_results(rx, verbose))
     {
         let scan = scanner::Scanner::create(params, stop.clone());
         let (infos, scanstatus) = col
