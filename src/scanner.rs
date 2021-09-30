@@ -75,10 +75,15 @@ impl fmt::Display for ScanError {
     }
 }
 // Scanning result for single host/port
-pub struct ScanResult {
+pub struct PortResult {
     pub address: IpAddr,
     pub port: u16,
     pub state: PortState,
+}
+
+pub enum ScanInfo {
+    PortStatus(PortResult),
+    HostScanned(IpAddr),
 }
 
 // Handle OtherError returned by Connect.
@@ -154,7 +159,7 @@ impl ScanType {
     async fn cycle(
         &self,
         sa: SocketAddr,
-        tx: Arc<Sender<ScanResult>>,
+        tx: Arc<Sender<ScanInfo>>,
         conn_timeout: Duration,
         retry_on_error: bool,
         try_count: usize,
@@ -210,11 +215,11 @@ impl ScanType {
                 }
             };
             if let Err(_e) = tx
-                .send(ScanResult {
+                .send(ScanInfo::PortStatus(PortResult {
                     address: sa.ip(),
                     port: sa.port(),
                     state,
-                })
+                }))
                 .await
             {
                 warn!("Result channel closed!")
@@ -262,7 +267,7 @@ impl Scanner {
         }
     }
 
-    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanResult>) -> Result<(), ScanError> {
+    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let ports_per_thread = u16::max(
             range.get_port_count() / self.params.concurrent_scans as u16,
             1,
@@ -293,7 +298,7 @@ impl Scanner {
         return retval;
     }
 
-    async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanResult>>) -> Host {
+    async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanInfo>>) -> Host {
         debug!("Starting to scan host {}", host.host);
         let tasks = FuturesUnordered::new();
         let ctx = HostContext {
@@ -323,7 +328,7 @@ impl Scanner {
         return Host {
             addr: host.host,
             tasks,
-            _context: ctx,
+            context: ctx,
         };
     }
 }
@@ -332,7 +337,7 @@ impl Scanner {
 struct HostContext {
     up: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
-    tx: Arc<Sender<ScanResult>>,
+    tx: Arc<Sender<ScanInfo>>,
     // max_timeout: Duration,
 }
 
@@ -356,7 +361,7 @@ impl HostContext {
 struct Host {
     addr: IpAddr,
     tasks: FuturesUnordered<JoinHandle<Result<(), ScanError>>>,
-    _context: HostContext,
+    context: HostContext,
 }
 
 impl Host {
@@ -368,6 +373,9 @@ impl Host {
                     ret = Err(e);
                 }
             }
+        }
+        if let Err(e) = self.context.tx.send(ScanInfo::HostScanned(self.addr)).await {
+            warn!("Unable to send scan info: {}", e);
         }
         info!("Host {} scan complete", self.addr);
         ret
