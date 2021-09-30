@@ -16,18 +16,21 @@ use crate::tools::{SemHandle, Semaphore};
 // OS -specific error codes for error conditions
 #[cfg(target_os = "macos")]
 mod os_errcodes {
-    pub(crate) static OS_ERR_HOST_DOWN: i32 = 64;
-    pub(crate) static OS_ERR_NET_UNREACH: i32 = 51;
+    pub(crate) const OS_ERR_HOST_DOWN: i32 = 64;
+    pub(crate) const OS_ERR_NET_UNREACH: i32 = 51;
+    pub(crate) const OS_ERR_TOO_MANY_FILES: i32 = 24;
 }
 #[cfg(target_os = "linux")]
 mod os_errcodes {
-    pub(crate) static OS_ERR_HOST_DOWN: i32 = 113;
-    pub(crate) static OS_ERR_NET_UNREACH: i32 = 101;
+    pub(crate) const OS_ERR_HOST_DOWN: i32 = 113;
+    pub(crate) const OS_ERR_NET_UNREACH: i32 = 101;
+    pub(crate) const OS_ERR_TOO_MANY_FILES: i32 = 24;
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod os_errcodes {
-    pub(crate) static OS_ERR_HOST_DOWN: i32 = -999;
-    pub(crate) static OS_ERR_NET_UNREACH: i32 = 999;
+    pub(crate) const OS_ERR_HOST_DOWN: i32 = -999;
+    pub(crate) const OS_ERR_NET_UNREACH: i32 = 999;
+    pub(crate) const OS_ERR_TOO_MANY_FILES: i32 = 24;
 }
 
 static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
@@ -44,14 +47,30 @@ pub enum PortState {
 }
 
 // Scanning error
-enum ScanError {
+#[derive(Clone)]
+pub enum ScanError {
     Down(String), // Host was detected to be down
+    TooManyFiles(),
+}
+
+impl ScanError {
+    pub fn is_fatal(&self) -> bool {
+        match self {
+            &ScanError::TooManyFiles() => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScanError::Down(msg) => write!(f, "{}", msg),
+            ScanError::TooManyFiles() => write!(
+                f,
+                "Too many concurrent scans. Decrease number of concurrent scans, \
+                or increase open file limit (ulimit -n)"
+            ),
         }
     }
 }
@@ -69,12 +88,11 @@ fn handle_other_error(
     connection_time: Duration,
 ) -> Result<PortState, ScanError> {
     e.raw_os_error()
-        .map_or(Ok(PortState::Closed(connection_time)), |n| {
-            if n == os_errcodes::OS_ERR_HOST_DOWN {
-                Ok(PortState::HostDown())
-            } else if n == os_errcodes::OS_ERR_NET_UNREACH {
-                Ok(PortState::NetError())
-            } else {
+        .map_or(Ok(PortState::Closed(connection_time)), |n| match n {
+            os_errcodes::OS_ERR_HOST_DOWN => Ok(PortState::HostDown()),
+            os_errcodes::OS_ERR_NET_UNREACH => Ok(PortState::NetError()),
+            os_errcodes::OS_ERR_TOO_MANY_FILES => Err(ScanError::TooManyFiles()),
+            _ => {
                 debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
                 Ok(PortState::Closed(connection_time))
             }
@@ -244,7 +262,7 @@ impl Scanner {
         }
     }
 
-    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanResult>) {
+    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanResult>) -> Result<(), ScanError> {
         let ports_per_thread = u16::max(
             range.get_port_count() / self.params.concurrent_scans as u16,
             1,
@@ -265,7 +283,14 @@ impl Scanner {
         }
         // all host tasks have been spawned
         debug!("Waiting for all hosts to complete");
-        while let Some(()) = waiters.next().await {}
+        let mut retval = Ok(());
+        while let Some(ret) = waiters.next().await {
+            match ret {
+                Err(e) => retval = Err(e),
+                _ => (),
+            };
+        }
+        return retval;
     }
 
     async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanResult>>) -> Host {
@@ -321,18 +346,31 @@ impl HostContext {
     fn host_down(&self) {
         self.up.store(false, Ordering::SeqCst);
     }
+
+    fn fatal(&mut self) {
+        warn!("Setting global stop due to fatal error");
+        self.stop_signal.store(true, Ordering::SeqCst);
+    }
 }
 
 struct Host {
     addr: IpAddr,
-    tasks: FuturesUnordered<JoinHandle<()>>,
+    tasks: FuturesUnordered<JoinHandle<Result<(), ScanError>>>,
     _context: HostContext,
 }
 
 impl Host {
-    async fn wait(mut self) {
-        while let Some(()) = self.tasks.next().await {}
+    async fn wait(mut self) -> Result<(), ScanError> {
+        let mut ret = Ok(());
+        while let Some(res) = self.tasks.next().await {
+            if let Err(e) = res {
+                if e.is_fatal() {
+                    ret = Err(e);
+                }
+            }
+        }
         info!("Host {} scan complete", self.addr);
+        ret
     }
 }
 
@@ -342,9 +380,10 @@ async fn scan_port_stripe(
     typ: ScanType,
     params: ScanParameters,
     sem: SemHandle,
-    ctx: HostContext,
-) {
+    mut ctx: HostContext,
+) -> Result<(), ScanError> {
     debug!("Starting stripe {:?} for {}", stripe, addr);
+    let mut ret = Ok(());
     for p in stripe {
         if !ctx.keep_running() {
             break;
@@ -363,11 +402,17 @@ async fn scan_port_stripe(
             Ok(_) => {}
             Err(e) => {
                 warn!("Terminating stripe for {} due to error: {}", addr, e);
-                ctx.host_down();
+                if e.is_fatal() {
+                    ctx.fatal();
+                } else {
+                    ctx.host_down();
+                }
+                ret = Err(e);
                 break;
             }
         }
     }
     sem.signal();
-    trace!("stripe complete for {}", addr)
+    trace!("stripe complete for {}", addr);
+    ret
 }

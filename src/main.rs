@@ -237,13 +237,21 @@ async fn main() {
         .spawn(collect_results(rx))
     {
         let scan = scanner::Scanner::create(params, stop.clone());
-        let (infos, _) = col
+        let (infos, scanstatus) = col
             .join(scan.scan(
                 range::ScanRange::create(&cfg.target(), &cfg.exludes(), cfg.ports()),
                 tx,
             ))
             .await;
-        // print resuts now that scan is complete
+        if let Err(e) = scanstatus {
+            if e.is_fatal() {
+                // fatal error, results can not be trusted.
+                exit_error(Some(e.to_string()));
+            } else {
+                error!("Error while scanning: {}", e);
+            }
+        }
+        // print results now that scan is complete
         if let Err(er) = output_results(&infos, cfg.json()).await {
             error!("Unable to output results: {}", er);
         }
