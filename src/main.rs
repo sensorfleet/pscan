@@ -29,9 +29,12 @@ async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<
                     .entry(status.address)
                     .or_insert_with(|| output::HostInfo::create(status.address));
                 match status.state {
-                    scanner::PortState::Open(d) => {
+                    scanner::PortState::Open(d, banner) => {
                         info.add_open_port(status.port);
                         info.add_delay(d);
+                        if banner.is_some() {
+                            info.add_banner(status.port, banner.unwrap());
+                        }
                     }
                     scanner::PortState::Closed(d) => {
                         info.add_closed_port(status.port);
@@ -184,7 +187,26 @@ async fn main() {
             .short("v")
             .takes_value(false)
             .required(false)
-            .help("Verbose output"));
+            .help("Verbose output")
+        ).arg(clap::Arg::with_name(config::ARG_READ_BANNER)
+            .long(config::ARG_READ_BANNER)
+            .short("B")
+            .takes_value(false)
+            .required(false)
+            .help("Try to read up to read-banner-size bytes (with read-banner-timeout) when connection is established")
+        ).arg(clap::Arg::with_name(config::ARG_READ_BANNER_TIMEOUT)
+            .long(config::ARG_READ_BANNER_TIMEOUT)
+            .takes_value(true)
+            .default_value("1000")
+            .required(false)
+            .help("Timeout in ms to wait for when reading banner from open port")
+        ).arg(clap::Arg::with_name(config::ARG_READ_BANNER_SIZE)
+            .long(config::ARG_READ_BANNER_SIZE)
+            .takes_value(true)
+            .default_value("256")
+            .required(false)
+            .help("Maximum number of bytes to read when reading banner from open port")
+        );
 
     let matches = match app.get_matches_safe() {
         Ok(m) => m,
