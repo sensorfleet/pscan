@@ -12,6 +12,9 @@ pub const ARG_JSON_NAME: &str = "json";
 pub const ARG_CONFIG_FILE_NAME: &str = "config";
 pub const ARG_RETRY_ON_ERROR_NAME: &str = "retry-on-error";
 pub const ARG_TRY_COUNT: &str = "try-count";
+pub const ARG_READ_BANNER_SIZE: &str = "read-banner-size";
+pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
+pub const ARG_READ_BANNER: &str = "read-banner";
 
 #[derive(Debug)]
 pub enum Error {
@@ -177,6 +180,12 @@ pub struct Config {
     retry_on_error: Option<bool>,
     #[serde(rename(deserialize = "try-count"))]
     try_count: Option<usize>,
+    #[serde(rename(deserialize = "read-banner"))]
+    read_banner: Option<bool>,
+    #[serde(rename(deserialize = "read-banner-size"))]
+    read_banner_size: Option<usize>,
+    #[serde(rename(deserialize = "read-banner-timeout"))]
+    read_banner_timeout: Option<Duration>,
 }
 
 // helper for parsing value  from command line parameter
@@ -210,6 +219,13 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
         let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR_NAME));
         let try_count =
             parse_from_string(&value, ARG_TRY_COUNT, |s| s.parse().map_err(Error::from))?;
+        let read_banner_size = parse_from_string(&value, ARG_READ_BANNER_SIZE, |s| {
+            s.parse().map_err(Error::from)
+        })?;
+        let read_banner_timeout = parse_from_string(&value, ARG_READ_BANNER_TIMEOUT, |s| {
+            Ok(Duration::from_millis(s.parse()?))
+        })?;
+        let read_banner = Some(value.is_present(ARG_READ_BANNER));
 
         Ok(Config {
             target,
@@ -220,6 +236,9 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             json,
             retry_on_error,
             try_count,
+            read_banner,
+            read_banner_size,
+            read_banner_timeout,
         })
     }
 }
@@ -251,12 +270,20 @@ where
 impl Config {
     // Get `ScanParameters` from values in this configuration
     pub fn as_params(&self) -> scanner::ScanParameters {
+        let (read_banner_size, read_banner_timeout) = if self.read_banner.unwrap_or(false) {
+            (self.read_banner_size, self.read_banner_timeout)
+        } else {
+            (None, None)
+        };
+
         scanner::ScanParameters {
             concurrent_scans: self.concurrent_scans.unwrap(),
             wait_timeout: self.timeout.unwrap(),
             enable_adaptive_timing: false,
             retry_on_error: self.retry_on_error.unwrap(),
             try_count: self.try_count.unwrap(),
+            read_banner_size,
+            read_banner_timeout,
         }
     }
 
@@ -309,6 +336,23 @@ impl Config {
         let try_count = get_or_override(self.try_count, matches, ARG_TRY_COUNT, |s| {
             s.parse().map_err(Error::from)
         })?;
+        let read_banner = {
+            if matches.is_present(ARG_READ_BANNER) {
+                Some(true)
+            } else {
+                self.read_banner.or(Some(false))
+            }
+        };
+        let read_banner_size =
+            get_or_override(self.read_banner_size, matches, ARG_READ_BANNER_SIZE, |s| {
+                s.parse().map_err(Error::from)
+            })?;
+        let read_banner_timeout = get_or_override(
+            self.read_banner_timeout,
+            matches,
+            ARG_READ_BANNER_TIMEOUT,
+            |s| Ok(Duration::from_millis(s.parse()?)),
+        )?;
 
         Ok(Config {
             target,
@@ -319,6 +363,9 @@ impl Config {
             json,
             retry_on_error,
             try_count,
+            read_banner,
+            read_banner_size,
+            read_banner_timeout,
         })
     }
 
@@ -346,6 +393,18 @@ impl Config {
             }
         } else {
             missing_fields.push(ARG_TRY_COUNT);
+        }
+
+        if self.read_banner.unwrap_or(false) {
+            // make sure we have all parametes for reading banner
+            // however, we should always have these values from
+            // command line parameter defaults.
+            if self.read_banner_size.is_none() {
+                missing_fields.push("Size for reading banner");
+            }
+            if self.read_banner_timeout.is_none() {
+                missing_fields.push("timeout for reading banner");
+            }
         }
 
         if !missing_fields.is_empty() {

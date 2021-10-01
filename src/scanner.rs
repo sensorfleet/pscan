@@ -1,10 +1,11 @@
 use async_std::channel::Sender;
 use async_std::future;
-use async_std::io::ErrorKind;
+use async_std::io::{ErrorKind, ReadExt};
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use async_std::sync::Arc;
 use async_std::task::{self, JoinHandle};
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::Future;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
@@ -39,11 +40,11 @@ static MAX_STRIPE_LEN: u16 = 100;
 
 // Detected state of a port
 pub enum PortState {
-    Open(Duration),    // port is open
-    Closed(Duration),  // port is closed
-    Timeout(Duration), // Did not get response withint timeout
-    HostDown(),        // Host was reported unreachable by OS
-    NetError(),        // Host could not be connected due network error
+    Open(Duration, Option<Vec<u8>>), // port is open, contains banner if we did read any
+    Closed(Duration),                // port is closed
+    Timeout(Duration),               // Did not get response withint timeout
+    HostDown(),                      // Host was reported unreachable by OS
+    NetError(),                      // Host could not be connected due network error
 }
 
 // Scanning error
@@ -107,7 +108,16 @@ fn handle_other_error(
 // try to connect to given SockerAddr.
 // Returns Ok(PortState) if a state of port could be determined, Err(ScanError)
 // if error occurred while scanning.
-async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, ScanError> {
+async fn try_port<F, C, Fut>(
+    sa: SocketAddr,
+    conn_timeout: Duration,
+    handler: F,
+    context: C,
+) -> Result<PortState, ScanError>
+where
+    F: FnOnce(TcpStream, C) -> Fut,
+    Fut: Future<Output = Option<Vec<u8>>>,
+{
     trace!("Trying {}", sa);
     let start = Instant::now();
     let res = future::timeout(conn_timeout, TcpStream::connect(sa)).await;
@@ -126,11 +136,9 @@ async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, S
     match c {
         Ok(s) => {
             info!("port {} Connection succesfull", sa.port());
-            if let Err(e) = s.shutdown(Shutdown::Both) {
-                warn!("Unable to shutdown connection: {}", e)
-            }
+            let data = handler(s, context).await;
             info!("Connection took {}ms", c_time.as_millis());
-            Ok(PortState::Open(c_time))
+            Ok(PortState::Open(c_time, data))
         }
         Err(e) => {
             trace!("Connection failed: {}", e);
@@ -148,6 +156,46 @@ async fn try_port(sa: SocketAddr, conn_timeout: Duration) -> Result<PortState, S
 // In future, there is hopefully more than one.
 pub enum ScanType {
     Tcp,
+    TcpBanner(usize, Duration),
+}
+
+async fn close_connection(s: TcpStream, how: Shutdown) -> Option<Vec<u8>> {
+    if let Err(e) = s.shutdown(how) {
+        warn!("Unable to shutdown connection: {}", e)
+    }
+    None
+}
+
+struct RdParms {
+    size: usize,
+    timeout: Duration,
+}
+
+async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
+    let mut buf = vec![0; p.size];
+    info!(
+        "Trying to read {} bytes of banner from {:?} with {}ms timeout",
+        p.size,
+        s.peer_addr().unwrap(),
+        p.timeout.as_millis()
+    );
+
+    let ret = future::timeout(p.timeout, s.read(&mut buf)).await;
+    info!("Read returned {:?}", ret);
+    let r = match ret {
+        Ok(Ok(0)) => None,
+        Ok(Ok(len)) => {
+            buf.resize(len, 0);
+            Some(buf)
+        }
+        Ok(Err(e)) => {
+            warn!("Error while reading data from {:?}: {}", s.peer_addr(), e);
+            None
+        }
+        Err(_) => None,
+    };
+    close_connection(s, Shutdown::Both).await;
+    r
 }
 
 // minimum timeout value to report for adaptive timeout
@@ -168,10 +216,19 @@ impl ScanType {
         loop {
             nr_of_tries += 1;
             let state = match self {
-                ScanType::Tcp => try_port(sa, conn_timeout).await?,
+                ScanType::Tcp => {
+                    try_port(sa, conn_timeout, close_connection, Shutdown::Both).await?
+                }
+                ScanType::TcpBanner(size, timeout) => {
+                    let p = RdParms {
+                        size: *size,
+                        timeout: *timeout,
+                    };
+                    try_port(sa, conn_timeout, read_banner, p).await?
+                }
             };
             let ret = match state {
-                PortState::Open(d) | PortState::Closed(d) => Ok(Some(d)),
+                PortState::Open(d, _) | PortState::Closed(d) => Ok(Some(d)),
                 PortState::Timeout(_) => {
                     if nr_of_tries >= try_count {
                         Ok(None)
@@ -231,11 +288,13 @@ impl ScanType {
 // parameters for whole scan operation
 #[derive(Clone, Copy)]
 pub struct ScanParameters {
-    pub wait_timeout: Duration,       // Duration to wait for responses
-    pub concurrent_scans: usize,      // number of concurrent tasks to run
-    pub enable_adaptive_timing: bool, // should adaptive timeout be used
-    pub retry_on_error: bool,         // should we retry on network error
-    pub try_count: usize,             // number of times to try if there is no response
+    pub wait_timeout: Duration,          // Duration to wait for responses
+    pub concurrent_scans: usize,         // number of concurrent tasks to run
+    pub enable_adaptive_timing: bool,    // should adaptive timeout be used
+    pub retry_on_error: bool,            // should we retry on network error
+    pub try_count: usize,                // number of times to try if there is no response
+    pub read_banner_size: Option<usize>, // number of bytes to read if connection is established
+    pub read_banner_timeout: Option<Duration>, // how long to wait for banner
 }
 
 impl Default for ScanParameters {
@@ -246,6 +305,8 @@ impl Default for ScanParameters {
             enable_adaptive_timing: false,
             retry_on_error: false,
             try_count: 2,
+            read_banner_size: None,
+            read_banner_timeout: None,
         }
     }
 }
@@ -259,9 +320,18 @@ pub struct Scanner {
 
 impl Scanner {
     pub fn create(params: ScanParameters, stop: Arc<AtomicBool>) -> Scanner {
+        let t = if params.read_banner_timeout.is_some() && params.read_banner_size.is_some() {
+            ScanType::TcpBanner(
+                params.read_banner_size.unwrap(),
+                params.read_banner_timeout.unwrap(),
+            )
+        } else {
+            ScanType::Tcp
+        };
+
         Scanner {
             sem: Semaphore::new(params.concurrent_scans),
-            r#type: ScanType::Tcp,
+            r#type: t,
             params,
             stop,
         }
