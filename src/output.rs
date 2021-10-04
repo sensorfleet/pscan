@@ -1,8 +1,9 @@
 use async_std::fs::File;
 use async_std::prelude::*;
+use serde::ser::SerializeMap;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -22,8 +23,50 @@ pub struct HostInfo {
     min_delay: Option<Duration>,
     #[serde(skip)]
     max_delay: Option<Duration>,
-    #[serde(skip)]
-    banners: HashMap<u16, Vec<u8>>,
+    banners: Option<Banners>,
+}
+
+struct Banners {
+    values: HashMap<u16, Vec<u8>>,
+}
+
+impl Display for Banners {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut builder = String::new();
+        builder.push_str(&format!("\n\t Banners received from open ports:\n"));
+        for (port, b) in &self.values {
+            match std::str::from_utf8(&b) {
+                Ok(s) => builder.push_str(&format!("\t\tPort: {} \"{}\"", port, s)),
+                Err(_e) => {
+                    builder.push_str(&format!("\t\tPort: {}: {} bytes of data", port, b.len()))
+                }
+            }
+        }
+        write!(f, "{}", builder)
+    }
+}
+
+impl Serialize for Banners {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.values.len()))?;
+        for (k, v) in &self.values {
+            let serialized_k = k.to_string();
+            let serialized_data = base64::encode(v);
+            map.serialize_entry(&serialized_k, &serialized_data)?;
+        }
+        map.end()
+    }
+}
+
+impl Default for Banners {
+    fn default() -> Self {
+        Self {
+            values: Default::default(),
+        }
+    }
 }
 
 impl HostInfo {
@@ -36,7 +79,7 @@ impl HostInfo {
             filtered_count: 0,
             min_delay: None,
             max_delay: None,
-            banners: HashMap::new(),
+            banners: None,
         }
     }
 
@@ -61,7 +104,8 @@ impl HostInfo {
     }
 
     pub fn add_banner(&mut self, port: u16, banner: Vec<u8>) {
-        self.banners.insert(port, banner);
+        let b = self.banners.get_or_insert(Default::default());
+        b.values.insert(port, banner);
     }
 
     pub fn open_port_count(&self) -> usize {
@@ -122,16 +166,9 @@ impl fmt::Display for HostInfo {
             delays.0.as_millis(),
             delays.1.as_millis()
         ));
-        if self.banners.len() > 0 {
-            pstr.push_str(&format!("\n\t Banners received from open ports:\n"));
-            for (port, b) in &self.banners {
-                match std::str::from_utf8(&b) {
-                    Ok(s) => pstr.push_str(&format!("\t\tPort: {} \"{}\"", port, s)),
-                    Err(_e) => {
-                        pstr.push_str(&format!("\t\tPort: {}: {} bytes of data", port, b.len()))
-                    }
-                }
-            }
+
+        if let Some(b) = &self.banners {
+            pstr.push_str(&b.to_string());
         }
         write!(f, "{}", pstr)
     }
