@@ -105,24 +105,24 @@ async fn main() {
         .version("0.0.1")
         .about("Scans ports")
         .arg(
-            clap::Arg::with_name(config::ARG_TARGET_NAME)
-                .long("target")
+            clap::Arg::with_name(config::ARG_TARGET)
+                .long(config::ARG_TARGET)
                 .short("t")
                 .takes_value(true)
                 .required(false)
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
         )
         .arg(
-            clap::Arg::with_name(config::ARG_EXCLUDE_NAME)
-                .long("exclude")
+            clap::Arg::with_name(config::ARG_EXCLUDE)
+                .long(config::ARG_EXCLUDE)
                 .short("e")
                 .takes_value(true)
                 .required(false)
                 .help("Comma -separated list of addresses to exclude from scanning")
         )
         .arg(
-            clap::Arg::with_name(config::ARG_PORTS_NAME)
-                .long("ports")
+            clap::Arg::with_name(config::ARG_PORTS)
+                .long(config::ARG_PORTS)
                 .short("p")
                 .takes_value(true)
                 .required(false)
@@ -130,8 +130,8 @@ async fn main() {
                 .help("Ports to scan"),
         )
         .arg(
-            clap::Arg::with_name(config::ARG_CONCURRENT_SCANS_NAME)
-                .long("concurrent-scans")
+            clap::Arg::with_name(config::ARG_CONCURRENT_SCANS)
+                .long(config::ARG_CONCURRENT_SCANS)
                 .short("b")
                 .takes_value(true)
                 .required(false)
@@ -147,43 +147,43 @@ async fn main() {
                 .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
         )
         .arg(
-            clap::Arg::with_name(config::ARG_TIMEOUT_NAME)
-                .long("timeout")
+            clap::Arg::with_name(config::ARG_TIMEOUT)
+                .long(config::ARG_TIMEOUT)
                 .short("T")
                 .takes_value(true)
                 .default_value("1000")
                 .required(false)
                 .help("Timeout in ms to wait for response before determening port as closed/firewalled")
         )
-        .arg(clap::Arg::with_name(config::ARG_JSON_NAME)
-            .long("json")
+        .arg(clap::Arg::with_name(config::ARG_JSON)
+            .long(config::ARG_JSON)
             .short("j")
             .takes_value(true)
             .required(false)
             .help("Write output as JSON into given file, - to write to stdout")
         )
-        .arg(clap::Arg::with_name(config::ARG_CONFIG_FILE_NAME)
-            .long("config")
+        .arg(clap::Arg::with_name(config::ARG_CONFIG_FILE)
+            .long(config::ARG_CONFIG_FILE)
             .short("C")
             .takes_value(true)
             .required(false)
             .help("Read configuration from given JSON file")
         )
-        .arg(clap::Arg::with_name(config::ARG_RETRY_ON_ERROR_NAME)
-            .long("retry-on-error")
+        .arg(clap::Arg::with_name(config::ARG_RETRY_ON_ERROR)
+            .long(config::ARG_RETRY_ON_ERROR)
             .short("R")
             .takes_value(false)
             .required(false)
             .help("Retry scan a few times on (possible transient) network error")
         ).arg(clap::Arg::with_name(config::ARG_TRY_COUNT)
-            .long("try-count")
+            .long(config::ARG_TRY_COUNT)
             .short("r")
             .takes_value(true)
             .required(false)
             .default_value("2")
             .help("Number of times to try a port which receives no response (including the initial try)")
-        ).arg(clap::Arg::with_name("verbose")
-            .long("verbose")
+        ).arg(clap::Arg::with_name(config::ARG_VERBOSE)
+            .long(config::ARG_VERBOSE)
             .short("v")
             .takes_value(false)
             .required(false)
@@ -222,11 +222,9 @@ async fn main() {
     let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
     let verbose = matches.is_present("verbose");
 
-    let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE_NAME) {
+    let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE) {
         // First load configuration from given file
-        match config::Config::from_json_file(
-            matches.value_of(config::ARG_CONFIG_FILE_NAME).unwrap(),
-        ) {
+        match config::Config::from_json_file(matches.value_of(config::ARG_CONFIG_FILE).unwrap()) {
             Ok(c) => Some(c),
             Err(e) => exit_error(Some(format!("Error while reading configuration: {}", e))),
         }

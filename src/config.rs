@@ -3,18 +3,19 @@ use crate::scanner;
 use serde::{Deserialize, Deserializer};
 use std::{convert::TryFrom, fmt, fs, net::IpAddr, path::Path, time::Duration};
 
-pub const ARG_TARGET_NAME: &str = "target";
-pub const ARG_EXCLUDE_NAME: &str = "exclude";
-pub const ARG_PORTS_NAME: &str = "ports";
-pub const ARG_CONCURRENT_SCANS_NAME: &str = "concurrent-scans";
-pub const ARG_TIMEOUT_NAME: &str = "timeout";
-pub const ARG_JSON_NAME: &str = "json";
-pub const ARG_CONFIG_FILE_NAME: &str = "config";
-pub const ARG_RETRY_ON_ERROR_NAME: &str = "retry-on-error";
+pub const ARG_TARGET: &str = "target";
+pub const ARG_EXCLUDE: &str = "exclude";
+pub const ARG_PORTS: &str = "ports";
+pub const ARG_CONCURRENT_SCANS: &str = "concurrent-scans";
+pub const ARG_TIMEOUT: &str = "timeout";
+pub const ARG_JSON: &str = "json";
+pub const ARG_CONFIG_FILE: &str = "config";
+pub const ARG_RETRY_ON_ERROR: &str = "retry-on-error";
 pub const ARG_TRY_COUNT: &str = "try-count";
 pub const ARG_READ_BANNER_SIZE: &str = "read-banner-size";
 pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
 pub const ARG_READ_BANNER: &str = "read-banner";
+pub const ARG_VERBOSE: &str = "verbose";
 
 #[derive(Debug)]
 pub enum Error {
@@ -204,19 +205,19 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
     type Error = Error;
 
     fn try_from(value: clap::ArgMatches) -> Result<Self, Self::Error> {
-        let target = parse_from_string(&value, ARG_TARGET_NAME, parse_addresses)?;
-        let excludes = parse_from_string(&value, ARG_EXCLUDE_NAME, parse_single_addresses)?;
-        let ports = parse_from_string(&value, ARG_PORTS_NAME, |s| {
+        let target = parse_from_string(&value, ARG_TARGET, parse_addresses)?;
+        let excludes = parse_from_string(&value, ARG_EXCLUDE, parse_single_addresses)?;
+        let ports = parse_from_string(&value, ARG_PORTS, |s| {
             ports::PortRange::try_from(s).map_err(Error::from)
         })?;
-        let concurrent_scans = parse_from_string(&value, ARG_CONCURRENT_SCANS_NAME, |s| {
+        let concurrent_scans = parse_from_string(&value, ARG_CONCURRENT_SCANS, |s| {
             s.parse().map_err(Error::from)
         })?;
-        let timeout = parse_from_string(&value, ARG_TIMEOUT_NAME, |s| {
+        let timeout = parse_from_string(&value, ARG_TIMEOUT, |s| {
             Ok(Duration::from_millis(s.parse()?))
         })?;
-        let json = value.value_of(ARG_JSON_NAME).map(|a| a.to_owned());
-        let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR_NAME));
+        let json = value.value_of(ARG_JSON).map(|a| a.to_owned());
+        let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR));
         let try_count =
             parse_from_string(&value, ARG_TRY_COUNT, |s| s.parse().map_err(Error::from))?;
         let read_banner_size = parse_from_string(&value, ARG_READ_BANNER_SIZE, |s| {
@@ -306,28 +307,22 @@ impl Config {
     // Override the current configuration values with ones from command line,
     // if there are any values given on command line.
     pub fn override_with(self, matches: &clap::ArgMatches) -> Result<Config, Error> {
-        let target = get_or_override(self.target, matches, ARG_TARGET_NAME, parse_addresses)?;
-        let excludes = get_or_override(
-            self.excludes,
-            matches,
-            ARG_EXCLUDE_NAME,
-            parse_single_addresses,
-        )?;
-        let ports = get_or_override(self.ports, matches, ARG_PORTS_NAME, |s| {
+        let target = get_or_override(self.target, matches, ARG_TARGET, parse_addresses)?;
+        let excludes =
+            get_or_override(self.excludes, matches, ARG_EXCLUDE, parse_single_addresses)?;
+        let ports = get_or_override(self.ports, matches, ARG_PORTS, |s| {
             ports::PortRange::try_from(s).map_err(Error::from)
         })?;
-        let concurrent_scans = get_or_override(
-            self.concurrent_scans,
-            matches,
-            ARG_CONCURRENT_SCANS_NAME,
-            |s| s.parse().map_err(Error::from),
-        )?;
-        let timeout = get_or_override(self.timeout, matches, ARG_TIMEOUT_NAME, |s| {
+        let concurrent_scans =
+            get_or_override(self.concurrent_scans, matches, ARG_CONCURRENT_SCANS, |s| {
+                s.parse().map_err(Error::from)
+            })?;
+        let timeout = get_or_override(self.timeout, matches, ARG_TIMEOUT, |s| {
             Ok(Duration::from_millis(s.parse()?))
         })?;
-        let json = get_or_override(self.json, matches, ARG_JSON_NAME, |s| Ok(s.to_owned()))?;
+        let json = get_or_override(self.json, matches, ARG_JSON, |s| Ok(s.to_owned()))?;
         let retry_on_error = {
-            if matches.is_present(ARG_RETRY_ON_ERROR_NAME) {
+            if matches.is_present(ARG_RETRY_ON_ERROR) {
                 Some(true)
             } else {
                 self.retry_on_error.or(Some(false))
