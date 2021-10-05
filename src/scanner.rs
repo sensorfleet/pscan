@@ -56,10 +56,7 @@ pub enum ScanError {
 
 impl ScanError {
     pub fn is_fatal(&self) -> bool {
-        match self {
-            &ScanError::TooManyFiles() => true,
-            _ => false,
-        }
+        matches!(self, ScanError::TooManyFiles())
     }
 }
 
