@@ -19,18 +19,18 @@ pub const ARG_READ_BANNER: &str = "read-banner";
 #[derive(Debug)]
 pub enum Error {
     Message(String),
-    IntError(std::num::ParseIntError),
-    NetParseError(cidr::NetworkParseError),
-    AddrError(std::net::AddrParseError),
+    ParseInt(std::num::ParseIntError),
+    ParseNet(cidr::NetworkParseError),
+    ParseAddr(std::net::AddrParseError),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Message(m) => write!(f, "{}", m),
-            Error::IntError(e) => write!(f, "{}", e),
-            Error::AddrError(e) => write!(f, "{}", e),
-            Error::NetParseError(e) => write!(f, "{}", e),
+            Error::ParseInt(e) => write!(f, "{}", e),
+            Error::ParseAddr(e) => write!(f, "{}", e),
+            Error::ParseNet(e) => write!(f, "{}", e),
         }
     }
 }
@@ -39,15 +39,15 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Message(_) => None,
-            Error::IntError(e) => Some(e),
-            Error::AddrError(e) => Some(e),
-            Error::NetParseError(e) => Some(e),
+            Error::ParseInt(e) => Some(e),
+            Error::ParseAddr(e) => Some(e),
+            Error::ParseNet(e) => Some(e),
         }
     }
 }
 impl From<std::num::ParseIntError> for Error {
     fn from(e: std::num::ParseIntError) -> Self {
-        Error::IntError(e)
+        Error::ParseInt(e)
     }
 }
 
@@ -59,13 +59,13 @@ impl From<std::str::ParseBoolError> for Error {
 
 impl From<cidr::NetworkParseError> for Error {
     fn from(e: cidr::NetworkParseError) -> Self {
-        Error::NetParseError(e)
+        Error::ParseNet(e)
     }
 }
 
 impl From<std::net::AddrParseError> for Error {
     fn from(e: std::net::AddrParseError) -> Self {
-        Error::AddrError(e)
+        Error::ParseAddr(e)
     }
 }
 
