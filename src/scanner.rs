@@ -355,12 +355,11 @@ impl Scanner {
         debug!("Waiting for all hosts to complete");
         let mut retval = Ok(());
         while let Some(ret) = waiters.next().await {
-            match ret {
-                Err(e) => retval = Err(e),
-                _ => (),
-            };
+            if let Err(e) = ret {
+                retval = Err(e)
+            }
         }
-        return retval;
+        retval
     }
 
     async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanInfo>>) -> Host {
