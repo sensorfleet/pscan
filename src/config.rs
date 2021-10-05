@@ -187,6 +187,7 @@ pub struct Config {
     read_banner_size: Option<usize>,
     #[serde(rename(deserialize = "read-banner-timeout"))]
     read_banner_timeout: Option<Duration>,
+    verbose: Option<bool>,
 }
 
 // helper for parsing value  from command line parameter
@@ -227,6 +228,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             Ok(Duration::from_millis(s.parse()?))
         })?;
         let read_banner = Some(value.is_present(ARG_READ_BANNER));
+        let verbose = Some(value.is_present(ARG_VERBOSE));
 
         Ok(Config {
             target,
@@ -240,6 +242,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
             read_banner,
             read_banner_size,
             read_banner_timeout,
+            verbose,
         })
     }
 }
@@ -304,6 +307,10 @@ impl Config {
         self.ports.take().unwrap()
     }
 
+    pub fn verbose(&self) -> bool {
+        self.verbose.unwrap_or(false)
+    }
+
     // Override the current configuration values with ones from command line,
     // if there are any values given on command line.
     pub fn override_with(self, matches: &clap::ArgMatches) -> Result<Config, Error> {
@@ -348,6 +355,13 @@ impl Config {
             ARG_READ_BANNER_TIMEOUT,
             |s| Ok(Duration::from_millis(s.parse()?)),
         )?;
+        let verbose = {
+            if matches.is_present(ARG_VERBOSE) {
+                Some(true)
+            } else {
+                self.verbose.or(Some(false))
+            }
+        };
 
         Ok(Config {
             target,
@@ -361,6 +375,7 @@ impl Config {
             read_banner,
             read_banner_size,
             read_banner_timeout,
+            verbose,
         })
     }
 
