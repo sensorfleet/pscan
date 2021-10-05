@@ -252,22 +252,20 @@ impl ScanType {
                             "Host {}, network error, marking down",
                             sa.ip()
                         )))
+                    } else if nr_of_tries >= try_count {
+                        Err(ScanError::Down(format!(
+                            "Host {}, tried {}/{} times, network error",
+                            sa.ip(),
+                            nr_of_tries,
+                            try_count
+                        )))
                     } else {
-                        if nr_of_tries >= try_count {
-                            Err(ScanError::Down(format!(
-                                "Host {}, tried {}/{} times, network error",
-                                sa.ip(),
-                                nr_of_tries,
-                                try_count
-                            )))
-                        } else {
-                            info!(
-                                "waiting 500ms before next retry ({}/{} tries)",
-                                nr_of_tries, try_count
-                            );
-                            task::sleep(Duration::from_millis(500)).await;
-                            continue;
-                        }
+                        info!(
+                            "waiting 500ms before next retry ({}/{} tries)",
+                            nr_of_tries, try_count
+                        );
+                        task::sleep(Duration::from_millis(500)).await;
+                        continue;
                     }
                 }
             };
