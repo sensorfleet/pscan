@@ -220,7 +220,6 @@ async fn main() {
     };
 
     let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
-    let verbose = matches.is_present("verbose");
 
     let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE) {
         // First load configuration from given file
@@ -249,6 +248,7 @@ async fn main() {
         exit_error(Some(format!("Configuration error: {}", e)))
     }
 
+    let verbose = cfg.verbose();
     let mut params: scanner::ScanParameters = cfg.as_params();
     if adaptive_timeout_enabled {
         params.enable_adaptive_timing = true;
