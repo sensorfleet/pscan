@@ -212,7 +212,7 @@ pub fn write_results_to_stdout(infos: &[HostInfo]) -> Result<(), async_std::io::
         no_open_ports,
         down_hosts
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn write_single_host_info(info: &HostInfo) {
