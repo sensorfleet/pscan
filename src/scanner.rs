@@ -389,11 +389,11 @@ impl Scanner {
             ));
             tasks.push(handle);
         }
-        return Host {
+        Host {
             addr: host.host,
             tasks,
             context: ctx,
-        };
+        }
     }
 }
 
@@ -407,9 +407,8 @@ struct HostContext {
 
 impl HostContext {
     fn keep_running(&self) -> bool {
-        return self
-            .up
-            .fetch_and(!self.stop_signal.load(Ordering::SeqCst), Ordering::SeqCst);
+        self.up
+            .fetch_and(!self.stop_signal.load(Ordering::SeqCst), Ordering::SeqCst)
     }
 
     fn host_down(&self) {
