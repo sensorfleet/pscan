@@ -138,14 +138,14 @@ async fn main() {
                 .help("Number of concurrent scans to run")
                 .default_value("100"),
         )
-        .arg(
-            clap::Arg::with_name("adaptive-timing")
-                .long("enable-adaptive-timing")
-                .short("A")
-                .takes_value(false)
-                .required(false)
-                .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
-        )
+        // .arg(
+        //     clap::Arg::with_name("adaptive-timing")
+        //         .long("enable-adaptive-timing")
+        //         .short("A")
+        //         .takes_value(false)
+        //         .required(false)
+        //         .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
+        // )
         .arg(
             clap::Arg::with_name(config::ARG_TIMEOUT)
                 .long(config::ARG_TIMEOUT)
@@ -219,8 +219,6 @@ async fn main() {
         },
     };
 
-    let adaptive_timeout_enabled = matches.is_present("adaptive-timeout");
-
     let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE) {
         // First load configuration from given file
         match config::Config::from_json_file(matches.value_of(config::ARG_CONFIG_FILE).unwrap()) {
@@ -249,10 +247,7 @@ async fn main() {
     }
 
     let verbose = cfg.verbose();
-    let mut params: scanner::ScanParameters = cfg.as_params();
-    if adaptive_timeout_enabled {
-        params.enable_adaptive_timing = true;
-    }
+    let params: scanner::ScanParameters = cfg.as_params();
 
     if params.retry_on_error {
         info!("Retry on error set")
