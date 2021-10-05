@@ -385,7 +385,7 @@ impl Config {
             missing_fields.push("concurrent scanner count")
         }
         if let Some(c) = self.try_count {
-            if c <= 0 {
+            if c == 0 {
                 return Err(Error::Message(format!(
                     "Invalid {} {}, expecting non-zero positive count",
                     ARG_TRY_COUNT, c
