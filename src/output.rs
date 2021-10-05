@@ -217,10 +217,10 @@ pub fn write_results_to_stdout(infos: &[HostInfo]) -> Result<(), async_std::io::
 
 pub fn write_single_host_info(info: &HostInfo) {
     if info.down {
-        print!("{}: down\n", info.address)
+        println!("{}: down", info.address)
     } else if info.open_port_count() == 0 {
-        print!("{}: no open ports\n", info.address)
+        println!("{}: no open ports", info.address)
     } else {
-        print!("{}\n", info)
+        println!("{}", info)
     }
 }
