@@ -35,7 +35,7 @@ impl Display for Banners {
         let mut builder = String::new();
         builder.push_str("\n\t Banners received from open ports:\n");
         for (port, b) in &self.values {
-            match std::str::from_utf8(&b) {
+            match std::str::from_utf8(b) {
                 Ok(s) => builder.push_str(&format!("\t\tPort: {} \"{}\"", port, s)),
                 Err(_e) => {
                     builder.push_str(&format!("\t\tPort: {}: {} bytes of data", port, b.len()))
