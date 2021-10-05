@@ -33,7 +33,7 @@ struct Banners {
 impl Display for Banners {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = String::new();
-        builder.push_str(&format!("\n\t Banners received from open ports:\n"));
+        builder.push_str("\n\t Banners received from open ports:\n");
         for (port, b) in &self.values {
             match std::str::from_utf8(&b) {
                 Ok(s) => builder.push_str(&format!("\t\tPort: {} \"{}\"", port, s)),
