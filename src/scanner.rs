@@ -2,10 +2,11 @@ use async_std::channel::Sender;
 use async_std::future;
 use async_std::io::{ErrorKind, ReadExt};
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
-use async_std::sync::Arc;
+use async_std::sync::{Arc, Mutex};
 use async_std::task::{self, JoinHandle};
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::Future;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
@@ -39,6 +40,7 @@ static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
 static MAX_STRIPE_LEN: u16 = 100;
 
 // Detected state of a port
+#[derive(Debug)]
 pub enum PortState {
     Open(Duration, Option<Vec<u8>>), // port is open, contains banner if we did read any
     Closed(Duration),                // port is closed
@@ -148,12 +150,14 @@ where
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 // available scans we can perform.
 // In future, there is hopefully more than one.
 pub enum ScanType {
     Tcp,
     TcpBanner(usize, Duration),
+    // this is only for unit tests, provide return values from hashmap
+    Test(Arc<Mutex<HashMap<SocketAddr, Result<PortState, ScanError>>>>),
 }
 
 async fn close_connection(s: TcpStream, how: Shutdown) -> Option<Vec<u8>> {
@@ -222,6 +226,10 @@ impl ScanType {
                         timeout: *timeout,
                     };
                     try_port(sa, conn_timeout, read_banner, p).await?
+                }
+                ScanType::Test(m) => {
+                    let mut val = m.lock().await;
+                    val.remove(&sa).unwrap_or(Ok(PortState::HostDown()))?
                 }
             };
             let ret = match state {
@@ -332,6 +340,20 @@ impl Scanner {
         }
     }
 
+    #[allow(dead_code)]
+    fn create_test(
+        params: ScanParameters,
+        stop: Arc<AtomicBool>,
+        map: HashMap<SocketAddr, Result<PortState, ScanError>>,
+    ) -> Scanner {
+        Scanner {
+            sem: Semaphore::new(params.concurrent_scans),
+            r#type: ScanType::Test(Arc::new(Mutex::new(map))),
+            params,
+            stop,
+        }
+    }
+
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let ports_per_thread = u16::max(
             range.get_port_count() / self.params.concurrent_scans as u16,
@@ -382,7 +404,7 @@ impl Scanner {
             let handle = task::spawn(scan_port_stripe(
                 host.host,
                 stripe,
-                self.r#type,
+                self.r#type.clone(),
                 self.params,
                 semh,
                 ctx.clone(),
@@ -486,4 +508,106 @@ async fn scan_port_stripe(
     sem.signal();
     trace!("stripe complete for {}", addr);
     ret
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config, ports};
+    use std::{convert::TryFrom, str::FromStr};
+
+    #[async_std::test]
+    async fn test_simple() {
+        let params = ScanParameters {
+            wait_timeout: Duration::from_millis(100),
+            concurrent_scans: 2,
+            enable_adaptive_timing: false,
+            retry_on_error: false,
+            try_count: 2,
+            read_banner_size: None,
+            read_banner_timeout: None,
+        };
+
+        let mut map = HashMap::new();
+
+        let addr1 = IpAddr::from_str("10.0.0.1").unwrap();
+        let addr2 = IpAddr::from_str("10.0.0.2").unwrap();
+
+        let addresses = config::parse_addresses("10.0.0.1, 10.0.0.2").unwrap();
+
+        let range = ScanRange::create(
+            &addresses,
+            &[],
+            ports::PortRange::try_from("22,80").unwrap(),
+        );
+
+        map.insert(
+            SocketAddr::new(addr1, 22),
+            Ok(PortState::Open(Duration::from_millis(10), None)),
+        );
+        map.insert(
+            SocketAddr::new(addr1, 80),
+            Ok(PortState::Open(Duration::from_millis(10), None)),
+        );
+        map.insert(
+            SocketAddr::new(addr2, 22),
+            Ok(PortState::Closed(Duration::from_millis(10))),
+        );
+        map.insert(
+            SocketAddr::new(addr2, 80),
+            Ok(PortState::Closed(Duration::from_millis(20))),
+        );
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let scanner = Scanner::create_test(params, stop, map);
+
+        let (tx, rx) = async_std::channel::bounded::<ScanInfo>(10);
+
+        let reader_task = task::spawn(async move {
+            let mut infos: Vec<ScanInfo> = Vec::new();
+            while let Ok(data) = rx.recv().await {
+                infos.push(data)
+            }
+            infos
+        });
+
+        let scan_result = scanner.scan(range, tx).await;
+        assert!(scan_result.is_ok());
+
+        let infos = reader_task.await;
+        let mut addr1_scanned = false;
+        let mut addr2_scanned = false;
+        for info in infos {
+            match info {
+                ScanInfo::PortStatus(status) => match status.state {
+                    PortState::Open(_, _) => {
+                        assert_eq!(status.address, addr1);
+                        assert!(status.port == 22 || status.port == 80);
+                    }
+                    PortState::Closed(_) => {
+                        assert_eq!(status.address, addr2);
+                        assert!(status.port == 80 || status.port == 22);
+                    }
+                    _ => {
+                        assert!(
+                            false,
+                            "Unexpected port state: {:?} for {}:{}",
+                            status.state, status.address, status.port
+                        )
+                    }
+                },
+                ScanInfo::HostScanned(addr) => {
+                    if addr == addr1 {
+                        assert!(!addr1_scanned);
+                        addr1_scanned = true
+                    } else if addr == addr2 {
+                        assert!(!addr2_scanned);
+                        addr2_scanned = true
+                    } else {
+                        assert!(false, "unexpected host {} scanned", addr);
+                    }
+                }
+            }
+        }
+    }
 }
