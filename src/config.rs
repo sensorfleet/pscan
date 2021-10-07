@@ -194,7 +194,7 @@ impl From<ports::Error> for Error {
 // Parse comma separated addresses or mask + netmasks, return
 // vector containing parsed addresses as cidr::IpCidr or Error
 // indicating error.
-fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, Error> {
+pub fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, Error> {
     let mut ret = Vec::new();
 
     if !val.contains(',') {
@@ -211,7 +211,7 @@ fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, Error> {
 
 // parse comman separated IP addresses. Expecting plain IP addresses, not
 // networks in address/mask
-fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, Error> {
+pub fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, Error> {
     let mut ret = Vec::new();
     if !val.contains(',') {
         let addr = val.trim().parse::<IpAddr>()?;
