@@ -264,7 +264,7 @@ where
     Ok(Some(r))
 }
 
-fn deserialize_timeout<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
+fn deserialize_duration<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -283,7 +283,7 @@ pub struct Config {
     ports: Option<ports::PortRange>,
     #[serde(rename(deserialize = "concurrent-scans"))]
     concurrent_scans: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_timeout")]
+    #[serde(default, deserialize_with = "deserialize_duration")]
     timeout: Option<Duration>,
     json: Option<String>,
     #[serde(rename(deserialize = "retry-on-error"))]
@@ -294,7 +294,10 @@ pub struct Config {
     read_banner: Option<bool>,
     #[serde(rename(deserialize = "read-banner-size"))]
     read_banner_size: Option<usize>,
-    #[serde(rename(deserialize = "read-banner-timeout"))]
+    #[serde(
+        rename(deserialize = "read-banner-timeout"),
+        deserialize_with = "deserialize_duration"
+    )]
     read_banner_timeout: Option<Duration>,
     verbose: Option<bool>,
 }
