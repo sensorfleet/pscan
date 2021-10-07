@@ -60,16 +60,18 @@ async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<
 
 async fn output_results(
     infos: &[output::HostInfo],
+    number_of_ports: usize,
     output_file: Option<String>,
 ) -> Result<(), async_std::io::Error> {
+    let number_of_hosts = infos.len();
     if let Some(fname) = output_file {
         let opens: Vec<&output::HostInfo> = infos
             .iter()
             .filter(|h| !h.is_down() && h.open_port_count() > 0)
             .collect();
-        output::write_json_into(&fname, opens).await
+        output::write_json_into(&fname, number_of_hosts, number_of_ports, opens).await
     } else {
-        output::write_results_to_stdout(infos)
+        output::write_results_to_stdout(number_of_hosts, number_of_ports, infos)
     }
 }
 
@@ -159,6 +161,9 @@ async fn main() {
 
     let sig_h = async_std::task::spawn(sighandler(signals, Arc::clone(&stop)));
 
+    let ports = cfg.ports();
+    let number_of_ports = ports.port_count() as usize;
+
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
         .spawn(collect_results(rx, verbose))
@@ -166,7 +171,7 @@ async fn main() {
         let scan = scanner::Scanner::create(params, stop.clone());
         let (infos, scanstatus) = col
             .join(scan.scan(
-                range::ScanRange::create(&cfg.target(), &cfg.exludes(), cfg.ports()),
+                range::ScanRange::create(&cfg.target(), &cfg.exludes(), ports),
                 tx,
             ))
             .await;
@@ -179,7 +184,7 @@ async fn main() {
             }
         }
         // print results now that scan is complete
-        if let Err(er) = output_results(&infos, cfg.json()).await {
+        if let Err(er) = output_results(&infos, number_of_ports, cfg.json()).await {
             error!("Unable to output results: {}", er);
         }
     } else {
