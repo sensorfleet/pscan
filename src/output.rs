@@ -25,7 +25,7 @@ pub struct HostInfo {
     min_delay: Option<Duration>,
     #[serde(skip)]
     max_delay: Option<Duration>,
-    banners: Option<Banners>,
+    banners: Banners,
 }
 
 struct Banners {
@@ -71,6 +71,12 @@ impl Default for Banners {
     }
 }
 
+impl Banners {
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
 impl HostInfo {
     pub fn create(addr: IpAddr) -> Self {
         HostInfo {
@@ -81,7 +87,7 @@ impl HostInfo {
             filtered_count: 0,
             min_delay: None,
             max_delay: None,
-            banners: None,
+            banners: Default::default(),
         }
     }
 
@@ -106,8 +112,7 @@ impl HostInfo {
     }
 
     pub fn add_banner(&mut self, port: u16, banner: Vec<u8>) {
-        let b = self.banners.get_or_insert(Default::default());
-        b.values.insert(port, banner);
+        self.banners.values.insert(port, banner);
     }
 
     pub fn open_port_count(&self) -> usize {
@@ -169,8 +174,8 @@ impl fmt::Display for HostInfo {
             delays.1.as_millis()
         ));
 
-        if let Some(b) = &self.banners {
-            pstr.push_str(&b.to_string());
+        if !self.banners.is_empty() {
+            pstr.push_str(&self.banners.to_string());
         }
         write!(f, "{}", pstr)
     }
