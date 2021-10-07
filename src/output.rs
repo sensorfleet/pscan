@@ -7,6 +7,8 @@ use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::time::Duration;
 
+const JSON_MESSAGE_SCAN_COMPLETE: &str = "scan_complete";
+
 #[derive(Serialize)]
 pub struct HostInfo {
     #[serde(rename(serialize = "host"))]
@@ -84,7 +86,7 @@ impl HostInfo {
     }
 
     pub fn add_open_port(&mut self, port: u16) {
-        self.open_ports.push(port)
+        self.open_ports.push(port);
     }
 
     pub fn add_closed_port(&mut self, _port: u16) {
@@ -173,12 +175,28 @@ impl fmt::Display for HostInfo {
         write!(f, "{}", pstr)
     }
 }
+#[derive(Serialize)]
+struct ScanComplete<'a> {
+    message: &'a str,
+    number_of_hosts: usize,
+    number_of_ports: usize,
+    results: &'a [&'a HostInfo],
+}
 
 pub async fn write_json_into(
     fname: &str,
+    number_of_hosts: usize,
+    number_of_ports: usize,
     info: Vec<&HostInfo>,
 ) -> Result<(), async_std::io::Error> {
-    let mut output_data = serde_json::to_string(&info)?;
+    let complete = ScanComplete {
+        number_of_hosts,
+        number_of_ports,
+        message: JSON_MESSAGE_SCAN_COMPLETE,
+        results: &info,
+    };
+
+    let mut output_data = serde_json::to_string(&complete)?;
     output_data.push('\n');
     if fname.trim() == "-" {
         async_std::io::stdout()
@@ -192,25 +210,27 @@ pub async fn write_json_into(
     Ok(())
 }
 
-pub fn write_results_to_stdout(infos: &[HostInfo]) -> Result<(), async_std::io::Error> {
+pub fn write_results_to_stdout(
+    number_of_hosts: usize,
+    number_of_ports: usize,
+    infos: &[HostInfo],
+) -> Result<(), async_std::io::Error> {
     print!("Scan complete:\n ");
-    let mut down_hosts = 0;
-    let mut no_open_ports = 0;
+    let mut number_of_down_hosts = 0;
+    let mut number_of_silent_hosts = 0;
     for info in infos {
         if info.is_down() {
-            down_hosts += 1;
+            number_of_down_hosts += 1;
             continue;
         } else if info.open_port_count() == 0 {
-            no_open_ports += 1;
+            number_of_silent_hosts += 1;
             continue;
         }
         println!("{}\n", info);
     }
     println!(
-        "{} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
-        infos.len(),
-        no_open_ports,
-        down_hosts
+        "{} ports on {} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
+        number_of_ports, number_of_hosts, number_of_silent_hosts, number_of_down_hosts
     );
     Ok(())
 }
