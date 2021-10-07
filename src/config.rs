@@ -557,3 +557,364 @@ impl Config {
         serde_json::from_str(&data).map_err(|e| Error::Message(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use cidr::{Cidr, IpCidr};
+
+    use crate::ports::PortIterator;
+
+    use super::*;
+
+    #[test]
+    fn test_parse_address() {
+        let addrstr = "192.168.1.1";
+        let ip = IpAddr::from_str(addrstr).unwrap();
+
+        let netstr = "192.168.1.0/24";
+
+        let addrline = format!("{}, {}", addrstr, netstr);
+
+        let result = parse_addresses(&addrline);
+        assert!(result.is_ok());
+        let addrs = result.unwrap();
+        assert_eq!(addrs.len(), 2);
+        assert!(addrs[0].is_ipv4() && addrs[0].is_host_address());
+        assert_eq!(addrs[0].first_address(), ip);
+
+        assert!(addrs[1].is_ipv4() && !addrs[1].is_host_address());
+        assert_eq!(addrs[1].network_length(), 24);
+        assert!(addrs[1].contains(&ip));
+
+        let result_s = parse_single_addresses(addrstr);
+        assert!(result_s.is_ok());
+        let addrs_s = result_s.unwrap();
+        assert_eq!(addrs_s.len(), 1);
+        assert_eq!(addrs_s[0], ip);
+    }
+
+    #[test]
+    fn test_parse_invalid_address() {
+        let invalid_addrs = [
+            "192.168.1.300",
+            "foo",
+            "192.168.1.0/200",
+            "192.168.1.1/",
+            "192.168.1.bar",
+            "",
+            "192.168.1.1/24",
+        ];
+
+        for addr in invalid_addrs {
+            assert!(
+                parse_addresses(addr).is_err(),
+                "invalid addr {} was parsed",
+                addr
+            );
+            assert!(
+                parse_single_addresses(addr).is_err(),
+                "invalid addr {} was parsed by parse_single_addresses()",
+                addr
+            );
+        }
+    }
+
+    #[test]
+    fn test_cmdline_to_config() {
+        let cmdline = [
+            "--target",
+            "192.168.1.1, 192.168.1.0/24",
+            "-p",
+            "22,80,8080",
+            "-v",
+            "-B",
+            "--concurrent-scans",
+            "600",
+            "--read-banner-size",
+            "1024",
+        ];
+
+        let app = build_commandline_args().setting(clap::AppSettings::NoBinaryName);
+        let m = app.get_matches_from(cmdline);
+        let cfg = Config::try_from(m).unwrap();
+        assert!(cfg.verify().is_ok());
+
+        assert!(cfg.verbose());
+        assert!(cfg.read_banner.unwrap());
+        assert!(cfg.target.is_some());
+        assert!(cfg.ports.is_some());
+        assert_eq!(cfg.target.unwrap().len(), 2);
+
+        assert_eq!(cfg.concurrent_scans.unwrap(), 600);
+        assert_eq!(cfg.read_banner_size.unwrap(), 1024);
+    }
+
+    struct OverwriteTest<'a> {
+        name: &'a str,
+        arg: &'a [&'a str],
+        check: Box<dyn FnOnce(Config) -> bool>,
+    }
+
+    #[test]
+    fn test_config_overwrite() {
+        let tests = [
+            OverwriteTest {
+                name: "target",
+                arg: &["--target", "192.168.1.2"],
+                check: Box::new(|c| {
+                    c.target.unwrap()[0]
+                        .first_address()
+                        .eq(&IpAddr::from_str("192.168.1.2").unwrap())
+                }),
+            },
+            OverwriteTest {
+                name: "ports",
+                arg: &["--ports", "22"],
+                check: Box::new(|c| {
+                    let mut p = c.ports.unwrap().collect::<Vec<PortIterator>>();
+                    assert_eq!(p.len(), 1);
+                    let ports = p.pop().unwrap().collect::<Vec<u16>>();
+                    assert_eq!(ports.len(), 1);
+                    ports[0] == 22
+                }),
+            },
+            OverwriteTest {
+                name: "exclude",
+                arg: &["--exclude", "192.168.1.3"],
+                check: Box::new(|c| {
+                    c.excludes.unwrap()[0].eq(&IpAddr::from_str("192.168.1.3").unwrap())
+                }),
+            },
+            OverwriteTest {
+                name: "concurrent-scans",
+                arg: &["--concurrent-scans", "100"],
+                check: Box::new(|c| c.concurrent_scans.unwrap() == 100),
+            },
+            OverwriteTest {
+                name: "timeout",
+                arg: &["--timeout", "1000"],
+                check: Box::new(|c| c.timeout.unwrap() == Duration::from_millis(1000)),
+            },
+            OverwriteTest {
+                name: "json",
+                arg: &["--json", "foo.json"],
+                check: Box::new(|c| c.json.unwrap() == "foo.json"),
+            },
+            OverwriteTest {
+                name: "retry_on_error",
+                arg: &["--retry-on-error"],
+                check: Box::new(|c| c.retry_on_error.unwrap()),
+            },
+            OverwriteTest {
+                name: "try_count",
+                arg: &["--try-count", "3"],
+                check: Box::new(|c| c.try_count.unwrap() == 3),
+            },
+            OverwriteTest {
+                name: "read_banner",
+                arg: &["--read-banner"],
+                check: Box::new(|c| c.read_banner.unwrap()),
+            },
+            OverwriteTest {
+                name: "read_banner_size",
+                arg: &["--read-banner-size", "64"],
+                check: Box::new(|c| c.read_banner_size.unwrap() == 64),
+            },
+            OverwriteTest {
+                name: "read_banner_timeout",
+                arg: &["--read-banner-timeout", "1000"],
+                check: Box::new(|c| c.read_banner_timeout.unwrap() == Duration::from_millis(1000)),
+            },
+            OverwriteTest {
+                name: "verbose",
+                arg: &["--verbose"],
+                check: Box::new(|c| c.verbose.unwrap()),
+            },
+        ];
+
+        for t in tests {
+            // Generate a "base" config and overwrite it with test values
+            // to ensure that values get overwritten
+            let cfg = Config {
+                target: Some(parse_addresses("192.168.1.1").unwrap()),
+                ports: Some(ports::PortRange::try_from("1-10").unwrap()),
+                excludes: Some(parse_single_addresses("192.168.1.2").unwrap()),
+                concurrent_scans: Some(1),
+                timeout: Some(Duration::from_millis(100)),
+                json: Some("config.json".to_owned()),
+                retry_on_error: Some(false),
+                try_count: Some(1),
+                read_banner: Some(false),
+                read_banner_size: Some(128),
+                read_banner_timeout: Some(Duration::from_millis(100)),
+                verbose: Some(false),
+            };
+
+            let m = build_commandline_args()
+                .setting(clap::AppSettings::NoBinaryName)
+                .get_matches_from(t.arg);
+
+            let new_cfg = cfg.override_with(&m).unwrap();
+            assert!((t.check)(new_cfg), "Overwrite test for {} failed", t.name)
+        }
+    }
+
+    #[test]
+    fn test_config_from_json() {
+        let raw_json = r#"
+        {
+            "target": "192.168.1.0/24",
+            "ports": "1,2",
+            "excludes": "192.168.1.1",
+            "concurrent-scans": 600,
+            "timeout": 1000,
+            "retry-on-error": true,
+            "try-count": 3,
+            "read-banner": true,
+            "read-banner-size": 512,
+            "read-banner-timeout": 1200,
+            "verbose": true
+        }
+        "#;
+
+        let cfg: Config = serde_json::from_str(raw_json).unwrap();
+
+        let addrs = cfg.target.unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0], IpCidr::from_str("192.168.1.0/24").unwrap());
+
+        let mut pi = cfg.ports.unwrap().collect::<Vec<PortIterator>>();
+        assert_eq!(pi.len(), 1);
+        let ports = pi.pop().unwrap().collect::<Vec<u16>>();
+        assert_eq!(ports.len(), 2);
+        assert!(ports[0] == 1 && ports[1] == 2);
+
+        let ex_addrs = cfg.excludes.unwrap();
+        assert_eq!(ex_addrs.len(), 1);
+        assert_eq!(ex_addrs[0], IpAddr::from_str("192.168.1.1").unwrap());
+
+        assert_eq!(cfg.concurrent_scans.unwrap(), 600);
+        assert_eq!(cfg.timeout.unwrap(), Duration::from_millis(1000));
+        assert!(cfg.retry_on_error.unwrap());
+        assert_eq!(cfg.try_count.unwrap(), 3);
+        assert!(cfg.read_banner.unwrap());
+        assert_eq!(cfg.read_banner_size.unwrap(), 512);
+        assert_eq!(
+            cfg.read_banner_timeout.unwrap(),
+            Duration::from_millis(1200)
+        );
+        assert!(cfg.verbose.unwrap());
+    }
+
+    #[test]
+    fn test_cfg_as_scan_params() {
+        let raw_json = r#"
+        {
+            "target": "192.168.1.0/24",
+            "ports": "1,2",
+            "excludes": "192.168.1.1",
+            "concurrent-scans": 600,
+            "timeout": 1000,
+            "retry-on-error": true,
+            "try-count": 3,
+            "read-banner": true,
+            "read-banner-size": 512,
+            "read-banner-timeout": 1200,
+            "verbose": true
+        }
+        "#;
+
+        let cfg: Config = serde_json::from_str(raw_json).unwrap();
+
+        let params = cfg.as_params();
+        assert_eq!(params.concurrent_scans, cfg.concurrent_scans.unwrap());
+        assert_eq!(params.wait_timeout, cfg.timeout.unwrap());
+        assert_eq!(
+            params.read_banner_size.unwrap(),
+            cfg.read_banner_size.unwrap()
+        );
+        assert_eq!(
+            params.read_banner_timeout.unwrap(),
+            cfg.read_banner_timeout.unwrap()
+        );
+        assert_eq!(params.try_count, cfg.try_count.unwrap());
+        assert_eq!(params.retry_on_error, cfg.retry_on_error.unwrap());
+    }
+
+    #[test]
+    fn test_cfg_as_scan_params_no_banner() {
+        let raw_json = r#"
+        {
+            "target": "192.168.1.0/24",
+            "ports": "1,2",
+            "excludes": "192.168.1.1",
+            "concurrent-scans": 600,
+            "timeout": 1000,
+            "retry-on-error": true,
+            "try-count": 3,
+            "read-banner": false,
+            "read-banner-size": 512,
+            "read-banner-timeout": 1200,
+            "verbose": true
+        }
+        "#;
+
+        let cfg: Config = serde_json::from_str(raw_json).unwrap();
+        let params = cfg.as_params();
+        // no read_banner set in config, the read banner parameters should
+        // not be set on scan parameters even if they have value in
+        // configuration
+        assert!(params.read_banner_size.is_none() && params.read_banner_timeout.is_none());
+    }
+
+    #[test]
+    fn test_config_with_defaults() {
+        let cfg = Config {
+            target: None,
+            excludes: None,
+            ports: None,
+            concurrent_scans: None,
+            timeout: None,
+            json: None,
+            retry_on_error: None,
+            try_count: None,
+            read_banner: None,
+            read_banner_size: None,
+            read_banner_timeout: None,
+            verbose: None,
+        };
+
+        let empty_cmdline: Vec<&str> = Vec::new();
+
+        let m = build_commandline_args()
+            .setting(clap::AppSettings::NoBinaryName)
+            .get_matches_from(&empty_cmdline);
+
+        let mut new_cfg = cfg.override_with(&m).unwrap();
+        // when no command line options are given and configuration is empty
+        // we should set the default values for fields we have sane defaults
+        assert!(new_cfg.ports.is_some());
+        assert!(new_cfg.concurrent_scans.is_some());
+        assert!(new_cfg.timeout.is_some());
+        assert!(new_cfg.retry_on_error.is_some());
+        assert!(new_cfg.try_count.is_some());
+        assert!(new_cfg.read_banner.is_some());
+        assert!(new_cfg.read_banner_size.is_some());
+        assert!(new_cfg.read_banner_timeout.is_some());
+        assert!(new_cfg.verbose.is_some());
+
+        // no values should be set for fields we have no proper defaults for
+        assert!(new_cfg.target.is_none());
+        assert!(new_cfg.excludes.is_none());
+        assert!(new_cfg.json.is_none());
+
+        // verify should return errors
+        assert!(new_cfg.verify().is_err());
+
+        new_cfg.target = Some(parse_addresses("192.168.1.1").unwrap());
+        // .. and now the configuration should be ok
+        assert!(new_cfg.verify().is_ok());
+    }
+}
