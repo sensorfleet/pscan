@@ -288,7 +288,7 @@ pub struct Config {
     #[serde(default, deserialize_with = "deserialize_target")]
     target: Option<Vec<cidr::IpCidr>>,
     #[serde(default, deserialize_with = "deserialize_excludes")]
-    excludes: Option<Vec<IpAddr>>,
+    exclude: Option<Vec<IpAddr>>,
     #[serde(default, deserialize_with = "deserialize_ports")]
     ports: Option<ports::PortRange>,
     #[serde(rename(deserialize = "concurrent-scans"))]
@@ -356,7 +356,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
 
         Ok(Config {
             target,
-            excludes,
+            exclude: excludes,
             ports,
             concurrent_scans,
             timeout,
@@ -426,7 +426,7 @@ impl Config {
     /// Note that this consumes the value from configuration struct leaving
     /// at as None (FIXME)
     pub fn exludes(&mut self) -> Vec<IpAddr> {
-        self.excludes.take().unwrap_or_default()
+        self.exclude.take().unwrap_or_default()
     }
 
     /// Get the json value from configuration.
@@ -453,8 +453,7 @@ impl Config {
     /// Consumes current configuration and returns new value
     pub fn override_with(self, matches: &clap::ArgMatches) -> Result<Config, Error> {
         let target = get_or_override(self.target, matches, ARG_TARGET, parse_addresses)?;
-        let excludes =
-            get_or_override(self.excludes, matches, ARG_EXCLUDE, parse_single_addresses)?;
+        let exclude = get_or_override(self.exclude, matches, ARG_EXCLUDE, parse_single_addresses)?;
         let ports = get_or_override(self.ports, matches, ARG_PORTS, |s| {
             ports::PortRange::try_from(s).map_err(Error::from)
         })?;
@@ -503,7 +502,7 @@ impl Config {
 
         Ok(Config {
             target,
-            excludes,
+            exclude,
             ports,
             concurrent_scans,
             timeout,
@@ -710,7 +709,7 @@ mod tests {
                 name: "exclude",
                 arg: &["--exclude", "192.168.1.3"],
                 check: Box::new(|c| {
-                    c.excludes.unwrap()[0].eq(&IpAddr::from_str("192.168.1.3").unwrap())
+                    c.exclude.unwrap()[0].eq(&IpAddr::from_str("192.168.1.3").unwrap())
                 }),
             },
             OverwriteTest {
@@ -766,7 +765,7 @@ mod tests {
             let cfg = Config {
                 target: Some(parse_addresses("192.168.1.1").unwrap()),
                 ports: Some(ports::PortRange::try_from("1-10").unwrap()),
-                excludes: Some(parse_single_addresses("192.168.1.2").unwrap()),
+                exclude: Some(parse_single_addresses("192.168.1.2").unwrap()),
                 concurrent_scans: Some(1),
                 timeout: Some(Duration::from_millis(100)),
                 json: Some("config.json".to_owned()),
@@ -793,7 +792,7 @@ mod tests {
         {
             "target": "192.168.1.0/24",
             "ports": "1,2",
-            "excludes": "192.168.1.1",
+            "exclude": "192.168.1.1",
             "concurrent-scans": 600,
             "timeout": 1000,
             "retry-on-error": true,
@@ -817,7 +816,7 @@ mod tests {
         assert_eq!(ports.len(), 2);
         assert!(ports[0] == 1 && ports[1] == 2);
 
-        let ex_addrs = cfg.excludes.unwrap();
+        let ex_addrs = cfg.exclude.unwrap();
         assert_eq!(ex_addrs.len(), 1);
         assert_eq!(ex_addrs[0], IpAddr::from_str("192.168.1.1").unwrap());
 
@@ -840,7 +839,7 @@ mod tests {
         {
             "target": "192.168.1.0/24",
             "ports": "1,2",
-            "excludes": "192.168.1.1",
+            "exclude": "192.168.1.1",
             "concurrent-scans": 600,
             "timeout": 1000,
             "retry-on-error": true,
@@ -875,7 +874,7 @@ mod tests {
         {
             "target": "192.168.1.0/24",
             "ports": "1,2",
-            "excludes": "192.168.1.1",
+            "exclude": "192.168.1.1",
             "concurrent-scans": 600,
             "timeout": 1000,
             "retry-on-error": true,
@@ -899,7 +898,7 @@ mod tests {
     fn test_config_with_defaults() {
         let cfg = Config {
             target: None,
-            excludes: None,
+            exclude: None,
             ports: None,
             concurrent_scans: None,
             timeout: None,
@@ -933,7 +932,7 @@ mod tests {
 
         // no values should be set for fields we have no proper defaults for
         assert!(new_cfg.target.is_none());
-        assert!(new_cfg.excludes.is_none());
+        assert!(new_cfg.exclude.is_none());
         assert!(new_cfg.json.is_none());
 
         // verify should return errors
