@@ -4,13 +4,16 @@ use cidr::{Cidr, IpCidr};
 
 use crate::ports::PortRange;
 
+/// HostIterator holds ports to scan for each host in `ScanRange`.
 pub struct HostIterator {
     pub host: IpAddr,
     pub ports: PortRange,
 }
 
-impl HostIterator {}
-
+///ScanRnge contains information which hosts and ports on those hosts to scan
+/// Use `hosts` to get iterator which returns `HosIterator` for each host to
+/// scan. `HostIterator` can be used to get iterators for ports to scan on
+/// that host.
 pub struct ScanRange<'a> {
     ports: PortRange,
     addrs: &'a [IpCidr],
@@ -18,6 +21,9 @@ pub struct ScanRange<'a> {
 }
 
 impl<'a> ScanRange<'a> {
+    /// Ceate new `ScanRange` which will return given ports on given
+    /// hosts/networks. The addresses in `excludes` are excluded from
+    /// resulting iterators.
     pub fn create(addrs: &'a [IpCidr], excludes: &'a [IpAddr], ports: PortRange) -> ScanRange<'a> {
         ScanRange {
             addrs,
@@ -26,12 +32,14 @@ impl<'a> ScanRange<'a> {
         }
     }
 
+    /// Get the number of ports to scan on each host
     pub fn get_port_count(&self) -> u16 {
         self.ports.port_count()
     }
 }
 
 impl ScanRange<'_> {
+    /// Get iterator which returns `HostIterator` for each host in range
     pub fn hosts(&'_ self) -> impl Iterator<Item = HostIterator> + '_ {
         return self
             .addrs

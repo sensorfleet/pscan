@@ -19,6 +19,8 @@ mod range;
 mod scanner;
 mod tools;
 
+/// This function is run on its own task to collect the scan results.
+/// Returns once the `Receiver` closes and returs the collected `HostInfo`.
 async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<output::HostInfo> {
     let mut host_infos: HashMap<IpAddr, output::HostInfo> = HashMap::new();
 
@@ -58,6 +60,9 @@ async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<
     return host_infos.drain().map(|(_, v)| v).collect();
 }
 
+/// Print the results, if `output_file` is `None`, then information is printed
+/// on command line, if it contains value, then information is printed as
+/// JSON to a file.
 async fn output_results(
     infos: &[output::HostInfo],
     number_of_ports: usize,
@@ -75,6 +80,7 @@ async fn output_results(
     }
 }
 
+/// Exit the program with error code and optional error message.
 fn exit_error(message: Option<String>) -> ! {
     let mut code = 0;
     if let Some(msg) = message {
@@ -85,6 +91,7 @@ fn exit_error(message: Option<String>) -> ! {
     std::process::exit(code);
 }
 
+/// Signal handler task, sets the given `flag` to true if signal is received
 async fn sighandler(signals: Signals, flag: Arc<AtomicBool>) {
     let mut s = signals.fuse();
 

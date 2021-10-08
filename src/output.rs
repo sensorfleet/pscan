@@ -7,27 +7,30 @@ use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::time::Duration;
 
+/// Message field value for scan complete
 const JSON_MESSAGE_SCAN_COMPLETE: &str = "scan_complete";
 
+/// Information about single scanned host
 #[derive(Serialize)]
 pub struct HostInfo {
     #[serde(rename(serialize = "host"))]
-    address: IpAddr,
+    address: IpAddr, // address for the host
     #[serde(rename(serialize = "open_ports"))]
-    open_ports: Vec<u16>,
+    open_ports: Vec<u16>, // ports found to be open
     #[serde(rename(serialize = "closed"))]
-    closed_count: u32,
+    closed_count: u32, // number of closed ports
     #[serde(rename(serialize = "filtered"))]
-    filtered_count: u32,
+    filtered_count: u32, // number of filtered ports, that is, ports not responding
     #[serde(skip)]
-    down: bool,
+    down: bool, // true if host was determined to be down
     #[serde(skip)]
-    min_delay: Option<Duration>,
+    min_delay: Option<Duration>, // minumum time for response, if any
     #[serde(skip)]
-    max_delay: Option<Duration>,
-    banners: Banners,
+    max_delay: Option<Duration>, // maximum time for responses, if any
+    banners: Banners, // banners read from open ports
 }
 
+/// Container for banners read from open ports
 struct Banners {
     values: HashMap<u16, Vec<u8>>,
 }
@@ -72,12 +75,14 @@ impl Default for Banners {
 }
 
 impl Banners {
+    /// Returns true if there are no banners collected
     fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 }
 
 impl HostInfo {
+    /// Create new empty `HostInfo` for given address
     pub fn create(addr: IpAddr) -> Self {
         HostInfo {
             address: addr,
@@ -91,34 +96,42 @@ impl HostInfo {
         }
     }
 
+    /// Add new open port
     pub fn add_open_port(&mut self, port: u16) {
         self.open_ports.push(port);
     }
 
+    /// Add new closed port
     pub fn add_closed_port(&mut self, _port: u16) {
         self.closed_count += 1;
     }
 
+    /// Add new filtered port
     pub fn add_filtered_port(&mut self, _port: u16) {
         self.filtered_count += 1;
     }
 
+    /// Mark to host as being down
     pub fn mark_down(&mut self) {
         self.down = true
     }
 
+    /// Check if host has been marked down
     pub fn is_down(&self) -> bool {
         self.down
     }
 
+    /// Add a recived banner for given port.
     pub fn add_banner(&mut self, port: u16, banner: Vec<u8>) {
         self.banners.values.insert(port, banner);
     }
 
+    /// Get number of ports reported open
     pub fn open_port_count(&self) -> usize {
         self.open_ports.len()
     }
 
+    /// Add delay information. That is, time it took to get a response from host.
     pub fn add_delay(&mut self, delay: Duration) {
         if let Some(d) = self.min_delay {
             if delay < d {
@@ -136,6 +149,7 @@ impl HostInfo {
         }
     }
 
+    /// Get delay information, (min, max), for this host
     pub fn get_delays(&self) -> (Duration, Duration) {
         (
             self.min_delay.unwrap_or_else(|| Duration::from_secs(0)),
@@ -180,6 +194,8 @@ impl fmt::Display for HostInfo {
         write!(f, "{}", pstr)
     }
 }
+/// `ScanComplete` information to print as JSON. Contains the results of
+/// a scan.
 #[derive(Serialize)]
 struct ScanComplete<'a> {
     message: &'a str,
@@ -188,6 +204,9 @@ struct ScanComplete<'a> {
     results: &'a [&'a HostInfo],
 }
 
+/// Write given information as JSON to a file with name `fname`.
+/// `number_of_hosts` and `number_of_ports` should be the count of hosts
+/// and the total number of ports scanned on each.
 pub async fn write_json_into(
     fname: &str,
     number_of_hosts: usize,
@@ -215,6 +234,9 @@ pub async fn write_json_into(
     Ok(())
 }
 
+/// Write given rerults to stdout in human readable form.
+/// `number_of_hosts` and `number_of_ports` should be the count of hosts
+/// and the total number of ports scanned on each.
 pub fn write_results_to_stdout(
     number_of_hosts: usize,
     number_of_ports: usize,
@@ -240,6 +262,8 @@ pub fn write_results_to_stdout(
     Ok(())
 }
 
+/// Write human readable informaiton about single scanned host. Used in
+/// verbose mode to print information to user.
 pub fn write_single_host_info(info: &HostInfo) {
     if info.down {
         println!("{}: down", info.address)
