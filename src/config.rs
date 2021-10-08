@@ -307,6 +307,7 @@ pub struct Config {
     #[serde(rename(deserialize = "read-banner-size"))]
     read_banner_size: Option<usize>,
     #[serde(
+        default,
         rename(deserialize = "read-banner-timeout"),
         deserialize_with = "deserialize_duration"
     )]
