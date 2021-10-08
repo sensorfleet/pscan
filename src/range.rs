@@ -4,15 +4,15 @@ use cidr::{Cidr, IpCidr};
 
 use crate::ports::PortRange;
 
-/// HostIterator holds ports to scan for each host in `ScanRange`.
-pub struct HostIterator {
+/// HostRange holds ports to scan for each host in `ScanRange`.
+pub struct HostRange {
     pub host: IpAddr,
     pub ports: PortRange,
 }
 
 ///ScanRnge contains information which hosts and ports on those hosts to scan
 /// Use `hosts` to get iterator which returns `HosIterator` for each host to
-/// scan. `HostIterator` can be used to get iterators for ports to scan on
+/// scan. `HostRange` can be used to get iterators for ports to scan on
 /// that host.
 pub struct ScanRange<'a> {
     ports: PortRange,
@@ -39,14 +39,14 @@ impl<'a> ScanRange<'a> {
 }
 
 impl ScanRange<'_> {
-    /// Get iterator which returns `HostIterator` for each host in range
-    pub fn hosts(&'_ self) -> impl Iterator<Item = HostIterator> + '_ {
+    /// Get iterator which returns `HostRange` for each host in range
+    pub fn hosts(&'_ self) -> impl Iterator<Item = HostRange> + '_ {
         return self
             .addrs
             .iter()
             .flat_map(|cidr| cidr.iter())
             .filter(move |a| !self.excludes.contains(a))
-            .map(move |a| HostIterator {
+            .map(move |a| HostRange {
                 host: a,
                 ports: self.ports.clone(),
             });
@@ -72,7 +72,7 @@ mod tests {
 
         let sr = ScanRange::create(&addresses, &excludes, ports);
 
-        let hosts: Vec<HostIterator> = sr.hosts().collect();
+        let hosts: Vec<HostRange> = sr.hosts().collect();
         assert_eq!(hosts.len(), 2);
 
         assert_eq!(hosts[0].host, "192.168.1.1".parse::<IpAddr>().unwrap());
@@ -87,7 +87,7 @@ mod tests {
 
         let sr = ScanRange::create(&addresses, &excludes, PortRange::try_from("1-10").unwrap());
 
-        let hosts: Vec<HostIterator> = sr.hosts().collect();
+        let hosts: Vec<HostRange> = sr.hosts().collect();
         assert_eq!(hosts.len(), 256);
         for i in 0..256 {
             let addrstr = format!("192.168.1.{}", i);
