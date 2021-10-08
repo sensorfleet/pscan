@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
 use crate::ports::PortIterator;
-use crate::range::{HostIterator, ScanRange};
+use crate::range::{HostRange, ScanRange};
 use crate::tools::{SemHandle, Semaphore};
 
 // OS -specific error codes for error conditions
@@ -412,7 +412,7 @@ impl Scanner {
     /// Do a scan for single host. The given iterator is used to get ports
     /// to scan and results are sent using the `tx` `Sender`.
     /// Returns `Host` that can be used wait for scan to finish.
-    async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanInfo>>) -> Host {
+    async fn scan_host(&self, host: HostRange, tx: Arc<Sender<ScanInfo>>) -> Host {
         debug!("Starting to scan host {}", host.host);
         let tasks = FuturesUnordered::new();
         let ctx = HostContext {
