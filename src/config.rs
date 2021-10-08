@@ -18,11 +18,13 @@ pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
 pub const ARG_READ_BANNER: &str = "read-banner";
 pub const ARG_VERBOSE: &str = "verbose";
 
+/// Current version
+pub const PSCAN_VERSION: &str = "0.1.0";
+
 /// Build command line arguments for the program.
 pub fn build_commandline_args() -> clap::App<'static, 'static> {
-    clap::App::new("Simple port scanner")
-        .version("0.0.1")
-        .about("Scans ports")
+    clap::App::new("TCP port scanner")
+        .version(PSCAN_VERSION)
         .arg(
             clap::Arg::with_name(ARG_TARGET)
                 .long(ARG_TARGET)
