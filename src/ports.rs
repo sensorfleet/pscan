@@ -3,13 +3,15 @@ use std::fmt;
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 
+/// Continuous port range.
 #[derive(Clone)]
 enum Prange {
-    Range((u16, u16)),
-    Atom(u16),
+    Range((u16, u16)), // range of continous ports from min to max, inclusive
+    Atom(u16),         // signle port
 }
 
 impl Prange {
+    /// Get the smallest port number
     fn min(&self) -> u16 {
         match self {
             Prange::Range((min, _max)) => *min,
@@ -17,6 +19,7 @@ impl Prange {
         }
     }
 
+    /// Get the largest port number
     fn max(&self) -> u16 {
         match self {
             Prange::Range((_min, max)) => *max,
@@ -24,6 +27,7 @@ impl Prange {
         }
     }
 
+    /// Get the number of ports on this range
     fn count(&self) -> u16 {
         match self {
             Prange::Range((min, max)) => max - min + 1,
@@ -41,14 +45,19 @@ impl fmt::Debug for Prange {
     }
 }
 
+/// A range of ports.
+/// Implements Iterartor which returns `PortIterator` instances which can then
+/// be used to iterare the actual ports. The `PortIterator`s returned will
+/// return at maximum `step` number of ports. This allows to partition a port
+/// range into stripes of ports which can then be iterated.
 #[derive(Clone)]
 pub struct PortRange {
-    // singles: Vec<u16>,
-    ranges: Vec<Prange>,
-    step: u16,
-    curr: (u16, u16),
+    ranges: Vec<Prange>, // continuous port ranges making this range
+    step: u16,           // number of ports to return for a step
+    curr: (u16, u16),    // current status of iterator, (index in ranges, current port)
 }
 
+/// Error returned if port range can not be parsed.
 #[derive(Debug)]
 pub struct Error {
     msg: String,
@@ -75,6 +84,7 @@ impl From<std::num::ParseIntError> for Error {
 }
 
 impl PortRange {
+    /// Get number of ports in the range
     pub fn port_count(&self) -> u16 {
         let mut count = 0;
         for r in &self.ranges {
@@ -83,11 +93,14 @@ impl PortRange {
         count
     }
 
+    /// Adjust the step, that is, maximum number of ports contained in each
+    /// returned PortIterator.
     pub fn adjust_step(&mut self, step: u16) {
         self.step = step;
     }
 }
 
+/// Parse a single port range, min-max (inclusive).
 fn parse_single_range(val: &str) -> Result<Prange, Error> {
     let parts: Vec<&str> = val.split('-').collect();
     if parts.len() > 2 {
@@ -127,6 +140,7 @@ impl TryFrom<&str> for PortRange {
     }
 }
 
+/// select next range to scan.
 fn select_range(range: &Prange, start: u16, step: u16) -> (u16, u16) {
     let end = {
         if start as u32 + (step - 1) as u32 >= range.max() as u32 {
@@ -178,6 +192,8 @@ impl Iterator for PortRange {
     }
 }
 
+/// Iterator returned by `PortRange` which can be used to iterate single port
+/// values.
 #[derive(Clone)]
 pub struct PortIterator {
     ranges: Vec<RangeInclusive<u16>>,
@@ -185,6 +201,7 @@ pub struct PortIterator {
 }
 
 impl PortIterator {
+    /// Create new iterator which is used to iterator given ranges
     fn new(ranges: Vec<RangeInclusive<u16>>) -> Self {
         PortIterator { ranges, idx: 0 }
     }

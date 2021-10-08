@@ -3,6 +3,7 @@ use crate::scanner;
 use serde::{Deserialize, Deserializer};
 use std::{convert::TryFrom, fmt, fs, net::IpAddr, path::Path, time::Duration};
 
+// names for the command line arguments
 pub const ARG_TARGET: &str = "target";
 pub const ARG_EXCLUDE: &str = "exclude";
 pub const ARG_PORTS: &str = "ports";
@@ -17,6 +18,7 @@ pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
 pub const ARG_READ_BANNER: &str = "read-banner";
 pub const ARG_VERBOSE: &str = "verbose";
 
+/// Build command line arguments for the program.
 pub fn build_commandline_args() -> clap::App<'static, 'static> {
     clap::App::new("Simple port scanner")
         .version("0.0.1")
@@ -126,6 +128,7 @@ pub fn build_commandline_args() -> clap::App<'static, 'static> {
         )
 }
 
+/// Error returned when parsing command line or configuration values
 #[derive(Debug)]
 pub enum Error {
     Message(String),
@@ -191,9 +194,9 @@ impl From<ports::Error> for Error {
     }
 }
 
-// Parse comma separated addresses or mask + netmasks, return
-// vector containing parsed addresses as cidr::IpCidr or Error
-// indicating error.
+/// Parse comma separated addresses or mask + netmasks, return
+/// vector containing parsed addresses as cidr::IpCidr or Error
+/// indicating error.
 pub fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, Error> {
     let mut ret = Vec::new();
 
@@ -209,8 +212,8 @@ pub fn parse_addresses(val: &str) -> Result<Vec<cidr::IpCidr>, Error> {
     Ok(ret)
 }
 
-// parse comman separated IP addresses. Expecting plain IP addresses, not
-// networks in address/mask
+/// parse comma separated IP addresses. Expecting plain IP addresses, not
+/// networks in address/mask
 pub fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, Error> {
     let mut ret = Vec::new();
     if !val.contains(',') {
@@ -224,11 +227,13 @@ pub fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, Error> {
     Ok(ret)
 }
 
-// produce error message detailing deserializstion failure for given component
+/// produce error message detailing deserializstion failure for given component
 fn deserialize_failed_for(component: &str, err: Error) -> String {
     format!("{}: {}", component, err.to_string().as_str())
 }
 
+/// Deserialize a string value from JSON and then use given function `p` to
+/// convert the string to its final type.
 fn deserialize_from_string<'de, T, F, D>(component: &str, des: D, p: F) -> Result<T, D::Error>
 where
     F: Fn(&str) -> Result<T, Error>,
@@ -238,6 +243,7 @@ where
     Ok(p(&val).map_err(|e| serde::de::Error::custom(deserialize_failed_for(component, e))))?
 }
 
+/// Deserialize `target` value from JSON
 fn deserialize_target<'de, D>(des: D) -> Result<Option<Vec<cidr::IpCidr>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -246,6 +252,7 @@ where
     Ok(Some(r))
 }
 
+/// Deserialize 'excludes' value from JSON
 fn deserialize_excludes<'de, D>(des: D) -> Result<Option<Vec<IpAddr>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -254,6 +261,7 @@ where
     Ok(Some(r))
 }
 
+/// Deserialize 'ports' value from JSON
 fn deserialize_ports<'de, D>(des: D) -> Result<Option<ports::PortRange>, D::Error>
 where
     D: Deserializer<'de>,
@@ -264,6 +272,8 @@ where
     Ok(Some(r))
 }
 
+/// Deserialize `Duration` from JSON. Excepts the JSON value to be a numeric
+/// value.
 fn deserialize_duration<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
 where
     D: Deserializer<'de>,
@@ -271,7 +281,7 @@ where
     let dur = u64::deserialize(des)?;
     Ok(Some(Duration::from_millis(dur)))
 }
-// Configuration parameters parsed from command line or JSON file
+/// Configuration parameters parsed from command line or JSON file
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -302,7 +312,9 @@ pub struct Config {
     verbose: Option<bool>,
 }
 
-// helper for parsing value  from command line parameter
+/// helper for parsing a value from command line parameter
+/// Command line parameter is expected to be a string, if it is available
+/// the given function `p` is used to convert the string to its final type.
 fn parse_from_string<F, T>(matches: &clap::ArgMatches, key: &str, p: F) -> Result<Option<T>, Error>
 where
     F: Fn(&str) -> Result<T, Error>,
@@ -359,8 +371,8 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
     }
 }
 
-// helper for checking if value for configuration is overridden in
-// command line.
+/// Helper for checking if value for configuration is overridden in
+/// command line.
 fn get_or_override<T, F>(
     val: Option<T>,
     matches: &clap::ArgMatches,
@@ -384,7 +396,7 @@ where
 }
 
 impl Config {
-    // Get `ScanParameters` from values in this configuration
+    /// Get `ScanParameters` from values in this configuration
     pub fn as_params(&self) -> scanner::ScanParameters {
         let (read_banner_size, read_banner_timeout) = if self.read_banner.unwrap_or(false) {
             (self.read_banner_size, self.read_banner_timeout)
@@ -403,28 +415,42 @@ impl Config {
         }
     }
 
+    /// Get the target value from configuration.
+    /// Note that this consumes the value from configuration struct leaving
+    /// at as None (FIXME)
     pub fn target(&mut self) -> Vec<cidr::IpCidr> {
         self.target.take().unwrap()
     }
 
+    /// Get the excludes value from configuration.
+    /// Note that this consumes the value from configuration struct leaving
+    /// at as None (FIXME)
     pub fn exludes(&mut self) -> Vec<IpAddr> {
         self.excludes.take().unwrap_or_default()
     }
 
+    /// Get the json value from configuration.
+    /// Note that this consumes the value from configuration struct leaving
+    /// at as None (FIXME)
     pub fn json(&mut self) -> Option<String> {
         self.json.take()
     }
 
+    /// Get the ports value from configuration.
+    /// Note that this consumes the value from configuration struct leaving
+    /// at as None (FIXME)
     pub fn ports(&mut self) -> ports::PortRange {
         self.ports.take().unwrap()
     }
 
+    /// Check if verbose is set on configuration
     pub fn verbose(&self) -> bool {
         self.verbose.unwrap_or(false)
     }
 
-    // Override the current configuration values with ones from command line,
-    // if there are any values given on command line.
+    /// Override the current configuration values with ones from command line,
+    /// if there are any values given on command line.
+    /// Consumes current configuration and returns new value
     pub fn override_with(self, matches: &clap::ArgMatches) -> Result<Config, Error> {
         let target = get_or_override(self.target, matches, ARG_TARGET, parse_addresses)?;
         let excludes =
@@ -491,7 +517,7 @@ impl Config {
         })
     }
 
-    // Verify that configuration contains all necessary values
+    /// Verify that configuration contains all necessary values
     pub fn verify(&self) -> Result<(), Error> {
         let mut missing_fields: Vec<&str> = Vec::new();
         if self.target.is_none() {
@@ -543,7 +569,7 @@ impl Config {
         Ok(())
     }
 
-    // Read configuration from given JSON file
+    /// Read configuration from given JSON file
     pub fn from_json_file(file_name: &str) -> Result<Config, Error> {
         let p = Path::new(file_name);
         if !p.exists() {

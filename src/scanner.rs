@@ -37,9 +37,10 @@ mod os_errcodes {
 
 static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
 
+/// Maximum number of ponts on single stripe
 static MAX_STRIPE_LEN: u16 = 100;
 
-// Detected state of a port
+/// Detected state of a port
 #[derive(Debug)]
 pub enum PortState {
     Open(Duration, Option<Vec<u8>>), // port is open, contains banner if we did read any
@@ -49,14 +50,16 @@ pub enum PortState {
     NetError(),                      // Host could not be connected due network error
 }
 
-// Scanning error
+/// Scanning error
 #[derive(Clone)]
 pub enum ScanError {
-    Down(String), // Host was detected to be down
-    TooManyFiles(),
+    Down(String),   // Host was detected to be down
+    TooManyFiles(), // OS reported too many open files
 }
 
 impl ScanError {
+    /// Check if error is fatal.
+    /// Fatal errors should terminate scanning.
     pub fn is_fatal(&self) -> bool {
         matches!(self, ScanError::TooManyFiles())
     }
@@ -74,20 +77,23 @@ impl fmt::Display for ScanError {
         }
     }
 }
-// Scanning result for single host/port
+/// Scanning result for a port in host.
 pub struct PortResult {
     pub address: IpAddr,
     pub port: u16,
     pub state: PortState,
 }
 
+/// Scan information emitted by scanner durin scan.
 pub enum ScanInfo {
+    /// A port has been scanned, contains the scanning result
     PortStatus(PortResult),
+    /// Scanning of host has been completed, all requested ports are scanned.
     HostScanned(IpAddr),
 }
 
-// Handle OtherError returned by Connect.
-// Try to detect at least if host is down.
+/// Handle OtherError returned by Connect.
+/// Handles cases for which there are no specific ErrorKind
 fn handle_other_error(
     e: std::io::Error,
     connection_time: Duration,
@@ -104,9 +110,14 @@ fn handle_other_error(
         })
 }
 
-// try to connect to given SockerAddr.
-// Returns Ok(PortState) if a state of port could be determined, Err(ScanError)
-// if error occurred while scanning.
+/// Try to connect to given SockerAddr and return the detected state of port.
+/// If no response is received from the port within given timeout, port state
+/// will be set to PortState::Timeout.
+///
+/// The given handler is called with context if connection is established.
+/// The handler should terminate the connection if it should not be left
+/// open. Callback context is used because Rust does not support async closures
+/// yet. Data returned by callback is included in PortState::Open returned.
 async fn try_port<F, C, Fut>(
     sa: SocketAddr,
     conn_timeout: Duration,
@@ -151,15 +162,19 @@ where
 }
 
 #[derive(Clone)]
-// available scans we can perform.
-// In future, there is hopefully more than one.
+/// ScanType determines the type of scan to perform.
 pub enum ScanType {
+    /// Scan for open TCP ports
     Tcp,
+    /// Scan for open TCP ports and try to read a banner from open ports.
+    /// Parameters are number of bytes to read and how long to wait for data.
     TcpBanner(usize, Duration),
-    // this is only for unit tests, provide return values from hashmap
+    /// this is only for unit tests, provide return values from hashmap
     Test(Arc<Mutex<HashMap<SocketAddr, Result<PortState, ScanError>>>>),
 }
 
+/// Close given TcpStream.
+/// Always returns None
 async fn close_connection(s: TcpStream, how: Shutdown) -> Option<Vec<u8>> {
     if let Err(e) = s.shutdown(how) {
         warn!("Unable to shutdown connection: {}", e)
@@ -167,11 +182,13 @@ async fn close_connection(s: TcpStream, how: Shutdown) -> Option<Vec<u8>> {
     None
 }
 
+/// Callback parameters for `read_banner()` function
 struct RdParms {
     size: usize,
     timeout: Duration,
 }
 
+/// `try_port()` callback that can be used to read banner from open TCP port
 async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
     let mut buf = vec![0; p.size];
     info!(
@@ -199,12 +216,16 @@ async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
     r
 }
 
-// minimum timeout value to report for adaptive timeout
-
 impl ScanType {
-    // Scan for single port in given host. Result will be sent
-    // using `tx` Sender. `conn_timeout` will indicate how long to wait
-    // for response.
+    /// Do a scan for given SocketAddr.
+    /// Connection is tried for `conn_timeout`, if no response is received
+    /// connection is tried `try_count` times (`try_count` 1 indicates no
+    /// retries).
+    /// If `retry_on_error` is `true` retries the connection `try_count` times
+    /// if network error is returned.
+    ///
+    /// The result of scanning is sent using `tx` `Sender`. Returned time,
+    /// if present, indicates how long it took to get response from host.
     async fn cycle(
         &self,
         sa: SocketAddr,
@@ -288,7 +309,7 @@ impl ScanType {
         }
     }
 }
-// parameters for whole scan operation
+/// Parameters for scan operation
 #[derive(Clone, Copy)]
 pub struct ScanParameters {
     pub wait_timeout: Duration,          // Duration to wait for responses
@@ -314,14 +335,17 @@ impl Default for ScanParameters {
     }
 }
 
+///Scanner can be used to scan for open TCP ports.
 pub struct Scanner {
-    sem: Semaphore,
-    r#type: ScanType,
-    params: ScanParameters,
-    stop: Arc<AtomicBool>,
+    sem: Semaphore,         // semaphore controlling number of concurrent tasks
+    r#type: ScanType,       // type of scan to perform
+    params: ScanParameters, // parameters for scans
+    stop: Arc<AtomicBool>,  // flag indicating that scanning should stop
 }
 
 impl Scanner {
+    /// Create new scanner with given parameters.
+    /// The `stop` flag can be used to stop ongoing scan.
     pub fn create(params: ScanParameters, stop: Arc<AtomicBool>) -> Scanner {
         let t = if params.read_banner_timeout.is_some() && params.read_banner_size.is_some() {
             ScanType::TcpBanner(
@@ -354,6 +378,7 @@ impl Scanner {
         }
     }
 
+    /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let ports_per_thread = u16::max(
             range.get_port_count() / self.params.concurrent_scans as u16,
@@ -384,6 +409,9 @@ impl Scanner {
         retval
     }
 
+    /// Do a scan for single host. The given iterator is used to get ports
+    /// to scan and results are sent using the `tx` `Sender`.
+    /// Returns `Host` that can be used wait for scan to finish.
     async fn scan_host(&self, host: HostIterator, tx: Arc<Sender<ScanInfo>>) -> Host {
         debug!("Starting to scan host {}", host.host);
         let tasks = FuturesUnordered::new();
@@ -419,6 +447,8 @@ impl Scanner {
     }
 }
 
+/// Context for scanning a host.
+/// Context is shared between all tasks doing a scan for same host
 #[derive(Clone)]
 struct HostContext {
     up: Arc<AtomicBool>,
@@ -428,21 +458,27 @@ struct HostContext {
 }
 
 impl HostContext {
+    /// Returns true if scanning should still continue.
+    /// Returns `true` stop is requested or host is determined to be down.
     fn keep_running(&self) -> bool {
         self.up
             .fetch_and(!self.stop_signal.load(Ordering::SeqCst), Ordering::SeqCst)
     }
 
+    /// Indicate that host is down.
     fn host_down(&self) {
         self.up.store(false, Ordering::SeqCst);
     }
 
+    /// Indicate that fatal error has occured during scan.
     fn fatal(&mut self) {
         warn!("Setting global stop due to fatal error");
         self.stop_signal.store(true, Ordering::SeqCst);
     }
 }
 
+/// Handle returned by `scan_host` which can be used to wait for completion
+/// of a scan.
 struct Host {
     addr: IpAddr,
     tasks: FuturesUnordered<JoinHandle<Result<(), ScanError>>>,
@@ -450,6 +486,7 @@ struct Host {
 }
 
 impl Host {
+    /// Wait for scan to complete
     async fn wait(mut self) -> Result<(), ScanError> {
         let mut ret = Ok(());
         while let Some(res) = self.tasks.next().await {
@@ -467,6 +504,9 @@ impl Host {
     }
 }
 
+/// This function is run on its own task to perform a scanning for a set of
+/// ports on a given host. The `stripe` iterator is used to get the ports
+/// to scan.
 async fn scan_port_stripe(
     addr: IpAddr,
     stripe: PortIterator,
