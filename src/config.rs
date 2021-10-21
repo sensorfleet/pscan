@@ -143,10 +143,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Message(m) => write!(f, "{}", m),
-            Error::ParseInt(e) => write!(f, "{}", e),
-            Error::ParseAddr(e) => write!(f, "{}", e),
-            Error::ParseNet(e) => write!(f, "{}", e),
+            Error::Message(m) => m.fmt(f),
+            Error::ParseInt(e) => e.fmt(f),
+            Error::ParseAddr(e) => e.fmt(f),
+            Error::ParseNet(e) => e.fmt(f),
         }
     }
 }
@@ -169,7 +169,7 @@ impl From<std::num::ParseIntError> for Error {
 
 impl From<std::str::ParseBoolError> for Error {
     fn from(e: std::str::ParseBoolError) -> Self {
-        Error::Message(format!("{}", e))
+        Error::Message(e.to_string())
     }
 }
 
@@ -193,7 +193,7 @@ impl From<&str> for Error {
 
 impl From<ports::Error> for Error {
     fn from(e: ports::Error) -> Self {
-        return Self::from(format!("{}", e).as_str());
+        Self::from(e.to_string().as_str())
     }
 }
 
