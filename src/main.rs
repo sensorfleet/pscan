@@ -66,7 +66,7 @@ async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<
 async fn output_results(
     infos: &[output::HostInfo],
     number_of_ports: usize,
-    output_file: Option<String>,
+    output_file: Option<&str>,
 ) -> Result<(), async_std::io::Error> {
     let number_of_hosts = infos.len();
     if let Some(fname) = output_file {
@@ -74,7 +74,7 @@ async fn output_results(
             .iter()
             .filter(|h| !h.is_down() && h.open_port_count() > 0)
             .collect();
-        output::write_json_into(&fname, number_of_hosts, number_of_ports, opens).await
+        output::write_json_into(fname, number_of_hosts, number_of_ports, opens).await
     } else {
         output::write_results_to_stdout(number_of_hosts, number_of_ports, infos)
     }

@@ -522,8 +522,8 @@ impl Config {
     }
 
     /// Get the json value from configuration.
-    pub fn json(&self) -> Option<String> {
-        self.json.clone()
+    pub fn json(&self) -> Option<&str> {
+        self.json.as_deref()
     }
 
     /// Check if verbose is set on configuration
