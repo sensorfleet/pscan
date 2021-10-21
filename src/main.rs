@@ -127,7 +127,7 @@ async fn main() {
         // First load configuration from given file
         match config::Config::from_json_file(matches.value_of(config::ARG_CONFIG_FILE).unwrap()) {
             Ok(c) => Some(c),
-            Err(e) => exit_error(Some(format!("Error while reading configuration: {}", e))),
+            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
         }
     } else {
         None
