@@ -133,7 +133,7 @@ async fn main() {
         None
     };
 
-    let mut cfg = if let Some(cf) = cfg_from_file {
+    let cfg = if let Some(cf) = cfg_from_file {
         match cf.override_with(&matches) {
             Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
             Ok(c) => c,
@@ -168,20 +168,15 @@ async fn main() {
 
     let sig_h = async_std::task::spawn(sighandler(signals, Arc::clone(&stop)));
 
-    let ports = cfg.ports();
-    let number_of_ports = ports.port_count() as usize;
+    let range = cfg.get_range().unwrap();
+    let number_of_ports = range.get_port_count() as usize;
 
     if let Ok(col) = Builder::new()
         .name("collector".to_owned())
         .spawn(collect_results(rx, verbose))
     {
         let scan = scanner::Scanner::create(params, stop.clone());
-        let (infos, scanstatus) = col
-            .join(scan.scan(
-                range::ScanRange::create(&cfg.target(), &cfg.exludes(), ports),
-                tx,
-            ))
-            .await;
+        let (infos, scanstatus) = col.join(scan.scan(cfg.get_range().unwrap(), tx)).await;
         if let Err(e) = scanstatus {
             if e.is_fatal() {
                 // fatal error, results can not be trusted.

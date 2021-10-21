@@ -1,4 +1,5 @@
 use crate::ports;
+use crate::range;
 use crate::scanner;
 use serde::{Deserialize, Deserializer};
 use std::{convert::TryFrom, fmt, fs, net::IpAddr, path::Path, time::Duration};
@@ -265,21 +266,23 @@ where
 }
 
 /// Deserialize `target` value from JSON
-fn deserialize_target<'de, D>(des: D) -> Result<Option<Vec<cidr::IpCidr>>, D::Error>
+fn deserialize_target<'de, D>(des: D) -> Result<Vec<cidr::IpCidr>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let r = deserialize_from_string(ARG_TARGET, des, parse_addresses)?;
-    Ok(Some(r))
+    Ok(deserialize_from_string(ARG_TARGET, des, parse_addresses)?)
 }
 
 /// Deserialize 'excludes' value from JSON
-fn deserialize_excludes<'de, D>(des: D) -> Result<Option<Vec<IpAddr>>, D::Error>
+fn deserialize_exclude<'de, D>(des: D) -> Result<Vec<IpAddr>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let r = deserialize_from_string(ARG_EXCLUDE, des, parse_single_addresses)?;
-    Ok(Some(r))
+    Ok(deserialize_from_string(
+        ARG_EXCLUDE,
+        des,
+        parse_single_addresses,
+    )?)
 }
 
 /// Deserialize 'ports' value from JSON
@@ -350,9 +353,9 @@ where
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default, deserialize_with = "deserialize_target")]
-    target: Option<Vec<cidr::IpCidr>>,
-    #[serde(default, deserialize_with = "deserialize_excludes")]
-    exclude: Option<Vec<IpAddr>>,
+    target: Vec<cidr::IpCidr>,
+    #[serde(default, deserialize_with = "deserialize_exclude")]
+    exclude: Vec<IpAddr>,
     #[serde(default, deserialize_with = "deserialize_ports")]
     ports: Option<ports::PortRange>,
     #[serde(
@@ -422,8 +425,9 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
     type Error = Error;
 
     fn try_from(value: clap::ArgMatches) -> Result<Self, Self::Error> {
-        let target = parse_from_string(&value, ARG_TARGET, parse_addresses)?;
-        let excludes = parse_from_string(&value, ARG_EXCLUDE, parse_single_addresses)?;
+        let target = parse_from_string(&value, ARG_TARGET, parse_addresses)?.unwrap_or_default();
+        let exclude =
+            parse_from_string(&value, ARG_EXCLUDE, parse_single_addresses)?.unwrap_or_default();
         let ports = parse_from_string(&value, ARG_PORTS, |s| {
             ports::PortRange::try_from(s).map_err(Error::from)
         })?;
@@ -448,7 +452,7 @@ impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
 
         Ok(Config {
             target,
-            exclude: excludes,
+            exclude,
             ports,
             concurrent_scans,
             timeout,
@@ -507,32 +511,19 @@ impl Config {
         }
     }
 
-    /// Get the target value from configuration.
-    /// Note that this consumes the value from configuration struct leaving
-    /// at as None (FIXME)
-    pub fn target(&mut self) -> Vec<cidr::IpCidr> {
-        self.target.take().unwrap()
-    }
-
-    /// Get the excludes value from configuration.
-    /// Note that this consumes the value from configuration struct leaving
-    /// at as None (FIXME)
-    pub fn exludes(&mut self) -> Vec<IpAddr> {
-        self.exclude.take().unwrap_or_default()
+    // Get ScanRange from configuration values.
+    // If `verify()` has been called this method will not return `None`
+    pub fn get_range(&self) -> Option<range::ScanRange> {
+        Some(range::ScanRange::create(
+            &self.target,
+            &self.exclude,
+            self.ports.as_ref()?.clone(),
+        ))
     }
 
     /// Get the json value from configuration.
-    /// Note that this consumes the value from configuration struct leaving
-    /// at as None (FIXME)
-    pub fn json(&mut self) -> Option<String> {
-        self.json.take()
-    }
-
-    /// Get the ports value from configuration.
-    /// Note that this consumes the value from configuration struct leaving
-    /// at as None (FIXME)
-    pub fn ports(&mut self) -> ports::PortRange {
-        self.ports.take().unwrap()
+    pub fn json(&self) -> Option<String> {
+        self.json.clone()
     }
 
     /// Check if verbose is set on configuration
@@ -544,8 +535,15 @@ impl Config {
     /// if there are any values given on command line.
     /// Consumes current configuration and returns new value
     pub fn override_with(self, matches: &clap::ArgMatches) -> Result<Config, Error> {
-        let target = get_or_override(self.target, matches, ARG_TARGET, parse_addresses)?;
-        let exclude = get_or_override(self.exclude, matches, ARG_EXCLUDE, parse_single_addresses)?;
+        let target = get_or_override(Some(self.target), matches, ARG_TARGET, parse_addresses)?
+            .unwrap_or_default();
+        let exclude = get_or_override(
+            Some(self.exclude),
+            matches,
+            ARG_EXCLUDE,
+            parse_single_addresses,
+        )?
+        .unwrap_or_default();
         let ports = get_or_override(self.ports, matches, ARG_PORTS, |s| {
             ports::PortRange::try_from(s).map_err(Error::from)
         })?;
@@ -611,7 +609,7 @@ impl Config {
     /// Verify that configuration contains all necessary values
     pub fn verify(&self) -> Result<(), Error> {
         let mut missing_fields: Vec<&str> = Vec::new();
-        if self.target.is_none() {
+        if self.target.is_empty() {
             missing_fields.push("targets to scan");
         }
         if self.ports.is_none() {
@@ -760,9 +758,9 @@ mod tests {
 
         assert!(cfg.verbose());
         assert!(cfg.read_banner.unwrap());
-        assert!(cfg.target.is_some());
+        assert!(!cfg.target.is_empty());
         assert!(cfg.ports.is_some());
-        assert_eq!(cfg.target.unwrap().len(), 2);
+        assert_eq!(cfg.target.len(), 2);
 
         assert_eq!(cfg.concurrent_scans.unwrap(), 600);
         assert_eq!(cfg.read_banner_size.unwrap(), 1024);
@@ -781,7 +779,7 @@ mod tests {
                 name: "target",
                 arg: &["--target", "192.168.1.2"],
                 check: Box::new(|c| {
-                    c.target.unwrap()[0]
+                    c.target[0]
                         .first_address()
                         .eq(&IpAddr::from_str("192.168.1.2").unwrap())
                 }),
@@ -800,9 +798,7 @@ mod tests {
             OverwriteTest {
                 name: "exclude",
                 arg: &["--exclude", "192.168.1.3"],
-                check: Box::new(|c| {
-                    c.exclude.unwrap()[0].eq(&IpAddr::from_str("192.168.1.3").unwrap())
-                }),
+                check: Box::new(|c| c.exclude[0].eq(&IpAddr::from_str("192.168.1.3").unwrap())),
             },
             OverwriteTest {
                 name: "concurrent-scans",
@@ -855,9 +851,9 @@ mod tests {
             // Generate a "base" config and overwrite it with test values
             // to ensure that values get overwritten
             let cfg = Config {
-                target: Some(parse_addresses("192.168.1.1").unwrap()),
+                target: parse_addresses("192.168.1.1").unwrap(),
                 ports: Some(ports::PortRange::try_from("1-10").unwrap()),
-                exclude: Some(parse_single_addresses("192.168.1.2").unwrap()),
+                exclude: parse_single_addresses("192.168.1.2").unwrap(),
                 concurrent_scans: Some(1),
                 timeout: Some(Duration::from_millis(100)),
                 json: Some("config.json".to_owned()),
@@ -898,7 +894,7 @@ mod tests {
 
         let cfg: Config = serde_json::from_str(raw_json).unwrap();
 
-        let addrs = cfg.target.unwrap();
+        let addrs = cfg.target;
         assert_eq!(addrs.len(), 1);
         assert_eq!(addrs[0], IpCidr::from_str("192.168.1.0/24").unwrap());
 
@@ -908,7 +904,7 @@ mod tests {
         assert_eq!(ports.len(), 2);
         assert!(ports[0] == 1 && ports[1] == 2);
 
-        let ex_addrs = cfg.exclude.unwrap();
+        let ex_addrs = cfg.exclude;
         assert_eq!(ex_addrs.len(), 1);
         assert_eq!(ex_addrs[0], IpAddr::from_str("192.168.1.1").unwrap());
 
@@ -989,8 +985,8 @@ mod tests {
     #[test]
     fn test_config_with_defaults() {
         let cfg = Config {
-            target: None,
-            exclude: None,
+            target: Default::default(),
+            exclude: Default::default(),
             ports: None,
             concurrent_scans: None,
             timeout: None,
@@ -1023,16 +1019,17 @@ mod tests {
         assert!(new_cfg.verbose.is_some());
 
         // no values should be set for fields we have no proper defaults for
-        assert!(new_cfg.target.is_none());
-        assert!(new_cfg.exclude.is_none());
+        assert!(new_cfg.target.is_empty());
         assert!(new_cfg.json.is_none());
+        assert!(new_cfg.exclude.is_empty());
 
         // verify should return errors
         assert!(new_cfg.verify().is_err());
 
-        new_cfg.target = Some(parse_addresses("192.168.1.1").unwrap());
+        new_cfg.target = parse_addresses("192.168.1.1").unwrap();
         // .. and now the configuration should be ok
         assert!(new_cfg.verify().is_ok());
+        assert!(new_cfg.get_range().is_some());
     }
 
     #[test]
@@ -1054,6 +1051,8 @@ mod tests {
 
         let cfg2 = cfg.override_with(&m).unwrap();
 
-        assert!(cfg2.verify().is_ok(), "verify not ok {:?}", cfg2.verify())
+        assert!(cfg2.verify().is_ok(), "verify not ok {:?}", cfg2.verify());
+
+        assert!(cfg2.get_range().is_some());
     }
 }
