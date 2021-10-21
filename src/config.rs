@@ -230,8 +230,26 @@ pub fn parse_single_addresses(val: &str) -> Result<Vec<IpAddr>, Error> {
 }
 
 /// produce error message detailing deserializstion failure for given component
-fn deserialize_failed_for(component: &str, err: Error) -> String {
-    format!("{}: {}", component, err.to_string().as_str())
+fn deserialize_failed_for<E>(component: &str, err: E) -> String
+where
+    E: std::error::Error,
+{
+    format!(
+        "invalid value for {}: {}",
+        component,
+        err.to_string().as_str()
+    )
+}
+/// Deserialize given type with serde and return the result in Option.
+/// If deserialization fails, use given component name in error message
+fn deserialize_type<'de, D, T>(des: D, component: &str) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::Deserialize<'de>,
+{
+    Ok(Some(T::deserialize(des).map_err(|e| {
+        serde::de::Error::custom(deserialize_failed_for(component, e))
+    })?))
 }
 
 /// Deserialize a string value from JSON and then use given function `p` to
@@ -241,7 +259,8 @@ where
     F: Fn(&str) -> Result<T, Error>,
     D: Deserializer<'de>,
 {
-    let val = String::deserialize(des)?;
+    let val = String::deserialize(des)
+        .map_err(|e| serde::de::Error::custom(deserialize_failed_for(component, e)))?;
     Ok(p(&val).map_err(|e| serde::de::Error::custom(deserialize_failed_for(component, e))))?
 }
 
@@ -250,7 +269,7 @@ fn deserialize_target<'de, D>(des: D) -> Result<Option<Vec<cidr::IpCidr>>, D::Er
 where
     D: Deserializer<'de>,
 {
-    let r = deserialize_from_string("addresses", des, parse_addresses)?;
+    let r = deserialize_from_string(ARG_TARGET, des, parse_addresses)?;
     Ok(Some(r))
 }
 
@@ -259,7 +278,7 @@ fn deserialize_excludes<'de, D>(des: D) -> Result<Option<Vec<IpAddr>>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let r = deserialize_from_string("excludes", des, parse_single_addresses)?;
+    let r = deserialize_from_string(ARG_EXCLUDE, des, parse_single_addresses)?;
     Ok(Some(r))
 }
 
@@ -268,21 +287,64 @@ fn deserialize_ports<'de, D>(des: D) -> Result<Option<ports::PortRange>, D::Erro
 where
     D: Deserializer<'de>,
 {
-    let r = deserialize_from_string("ports", des, |s| {
+    let r = deserialize_from_string(ARG_PORTS, des, |s| {
         ports::PortRange::try_from(s).map_err(Error::from)
     })?;
     Ok(Some(r))
 }
 
-/// Deserialize `Duration` from JSON. Excepts the JSON value to be a numeric
-/// value.
-fn deserialize_duration<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
+fn deserialize_timeout<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let dur = u64::deserialize(des)?;
-    Ok(Some(Duration::from_millis(dur)))
+    Ok(deserialize_type(des, ARG_TIMEOUT)?.map(Duration::from_millis))
 }
+fn deserialize_banner_timeout<'de, D>(des: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_type(des, ARG_READ_BANNER_TIMEOUT)?.map(Duration::from_millis))
+}
+
+fn deserialize_retry_on_error<'de, D>(des: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_RETRY_ON_ERROR)
+}
+fn deserialize_read_banner<'de, D>(des: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_READ_BANNER)
+}
+
+fn deserialize_verbose<'de, D>(des: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_VERBOSE)
+}
+
+fn deserialize_concurrent_scans<'de, D>(des: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_CONCURRENT_SCANS)
+}
+fn deserialize_try_count<'de, D>(des: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_TRY_COUNT)
+}
+fn deserialize_banner_size<'de, D>(des: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_READ_BANNER_SIZE)
+}
+
 /// Configuration parameters parsed from command line or JSON file
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -293,25 +355,46 @@ pub struct Config {
     exclude: Option<Vec<IpAddr>>,
     #[serde(default, deserialize_with = "deserialize_ports")]
     ports: Option<ports::PortRange>,
-    #[serde(rename(deserialize = "concurrent-scans"))]
+    #[serde(
+        default,
+        rename(deserialize = "concurrent-scans"),
+        deserialize_with = "deserialize_concurrent_scans"
+    )]
     concurrent_scans: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_duration")]
+    #[serde(default, deserialize_with = "deserialize_timeout")]
     timeout: Option<Duration>,
     json: Option<String>,
-    #[serde(rename(deserialize = "retry-on-error"))]
+    #[serde(
+        default,
+        rename(deserialize = "retry-on-error"),
+        deserialize_with = "deserialize_retry_on_error"
+    )]
     retry_on_error: Option<bool>,
-    #[serde(rename(deserialize = "try-count"))]
+    #[serde(
+        default,
+        rename(deserialize = "try-count"),
+        deserialize_with = "deserialize_try_count"
+    )]
     try_count: Option<usize>,
-    #[serde(rename(deserialize = "read-banner"))]
+    #[serde(
+        default,
+        rename(deserialize = "read-banner"),
+        deserialize_with = "deserialize_read_banner"
+    )]
     read_banner: Option<bool>,
-    #[serde(rename(deserialize = "read-banner-size"))]
+    #[serde(
+        default,
+        rename(deserialize = "read-banner-size"),
+        deserialize_with = "deserialize_banner_size"
+    )]
     read_banner_size: Option<usize>,
     #[serde(
         default,
         rename(deserialize = "read-banner-timeout"),
-        deserialize_with = "deserialize_duration"
+        deserialize_with = "deserialize_banner_timeout"
     )]
     read_banner_timeout: Option<Duration>,
+    #[serde(default, deserialize_with = "deserialize_verbose")]
     verbose: Option<bool>,
 }
 
@@ -323,7 +406,13 @@ where
     F: Fn(&str) -> Result<T, Error>,
 {
     if let Some(value) = matches.value_of(key) {
-        Ok(Some(p(value)?))
+        Ok(Some(p(value).map_err(|e| {
+            Error::Message(format!(
+                "invalid value for {}: {}",
+                key,
+                e.to_string().as_str()
+            ))
+        })?))
     } else {
         Ok(None)
     }
@@ -944,5 +1033,27 @@ mod tests {
         new_cfg.target = Some(parse_addresses("192.168.1.1").unwrap());
         // .. and now the configuration should be ok
         assert!(new_cfg.verify().is_ok());
+    }
+
+    #[test]
+    fn test_minimal_config() {
+        let raw_json = r#"
+        {
+            "target": "192.168.1.1"
+        }
+        "#;
+
+        let cfg: Config = serde_json::from_str(raw_json).unwrap();
+
+        // we need to parse empty command line to set the
+        // defaults with override_with()
+
+        let app = build_commandline_args().setting(clap::AppSettings::NoBinaryName);
+        let vec: Vec<String> = vec![];
+        let m = app.get_matches_from(vec);
+
+        let cfg2 = cfg.override_with(&m).unwrap();
+
+        assert!(cfg2.verify().is_ok(), "verify not ok {:?}", cfg2.verify())
     }
 }
