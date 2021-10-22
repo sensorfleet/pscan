@@ -610,16 +610,16 @@ impl Config {
     pub fn verify(&self) -> Result<(), Error> {
         let mut missing_fields: Vec<&str> = Vec::new();
         if self.target.is_empty() {
-            missing_fields.push("targets to scan");
+            missing_fields.push(ARG_TARGET);
         }
         if self.ports.is_none() {
-            missing_fields.push("ports to scan")
+            missing_fields.push(ARG_PORTS);
         }
         if self.timeout.is_none() {
-            missing_fields.push("connection timeout")
+            missing_fields.push(ARG_TIMEOUT);
         }
         if self.concurrent_scans.is_none() {
-            missing_fields.push("concurrent scanner count")
+            missing_fields.push(ARG_CONCURRENT_SCANS);
         }
         if let Some(c) = self.try_count {
             if c == 0 {
@@ -637,10 +637,10 @@ impl Config {
             // however, we should always have these values from
             // command line parameter defaults.
             if self.read_banner_size.is_none() {
-                missing_fields.push("Size for reading banner");
+                missing_fields.push(ARG_READ_BANNER_SIZE);
             }
             if self.read_banner_timeout.is_none() {
-                missing_fields.push("timeout for reading banner");
+                missing_fields.push(ARG_READ_BANNER_TIMEOUT);
             }
         }
 
@@ -649,7 +649,7 @@ impl Config {
 
             return Err(Error::Message(format!(
                 "missing configuration values for: {}",
-                fields.strip_suffix(", ").unwrap()
+                fields
             )));
         }
         Ok(())
