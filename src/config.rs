@@ -645,10 +645,7 @@ impl Config {
         }
 
         if !missing_fields.is_empty() {
-            let fields = missing_fields.iter().fold(String::new(), |mut acc, s| {
-                acc.push_str(format!("{}, ", s).as_str());
-                acc
-            });
+            let fields = missing_fields.join(", ");
 
             return Err(Error::Message(format!(
                 "missing configuration values for: {}",
