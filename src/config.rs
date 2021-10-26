@@ -618,14 +618,21 @@ impl Config {
         if self.timeout.is_none() {
             missing_fields.push(ARG_TIMEOUT);
         }
-        if self.concurrent_scans.is_none() {
+        if let Some(c) = self.concurrent_scans {
+            if c == 0 {
+                return Err(Error::Message(format!(
+                    "invalid value for {}: Value needs to be non-zero",
+                    ARG_CONCURRENT_SCANS
+                )));
+            }
+        } else {
             missing_fields.push(ARG_CONCURRENT_SCANS);
         }
         if let Some(c) = self.try_count {
             if c == 0 {
                 return Err(Error::Message(format!(
-                    "Invalid {} {}, expecting non-zero positive count",
-                    ARG_TRY_COUNT, c
+                    "invalid value for {}: value needs to be non-zero",
+                    ARG_TRY_COUNT
                 )));
             }
         } else {
