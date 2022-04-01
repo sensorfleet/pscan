@@ -23,38 +23,38 @@ pub const ARG_VERBOSE: &str = "verbose";
 pub const PSCAN_VERSION: &str = "0.1.0";
 
 /// Build command line arguments for the program.
-pub fn build_commandline_args() -> clap::App<'static, 'static> {
-    clap::App::new("TCP port scanner")
+pub fn build_commandline_args() -> clap::Command<'static> {
+    clap::Command::new("TCP port scanner")
         .version(PSCAN_VERSION)
         .arg(
-            clap::Arg::with_name(ARG_TARGET)
+            clap::Arg::new(ARG_TARGET)
                 .long(ARG_TARGET)
-                .short("t")
+                .short('t')
                 .takes_value(true)
                 .required(false)
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
         )
         .arg(
-            clap::Arg::with_name(ARG_EXCLUDE)
+            clap::Arg::new(ARG_EXCLUDE)
                 .long(ARG_EXCLUDE)
-                .short("e")
+                .short('e')
                 .takes_value(true)
                 .required(false)
                 .help("Comma -separated list of addresses to exclude from scanning")
         )
         .arg(
-            clap::Arg::with_name(ARG_PORTS)
+            clap::Arg::new(ARG_PORTS)
                 .long(ARG_PORTS)
-                .short("p")
+                .short('p')
                 .takes_value(true)
                 .required(false)
                 .default_value("1-100")
                 .help("Ports to scan"),
         )
         .arg(
-            clap::Arg::with_name(ARG_CONCURRENT_SCANS)
+            clap::Arg::new(ARG_CONCURRENT_SCANS)
                 .long(ARG_CONCURRENT_SCANS)
-                .short("b")
+                .short('b')
                 .takes_value(true)
                 .required(false)
                 .help("Number of concurrent scans to run")
@@ -69,60 +69,60 @@ pub fn build_commandline_args() -> clap::App<'static, 'static> {
         //         .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
         // )
         .arg(
-            clap::Arg::with_name(ARG_TIMEOUT)
+            clap::Arg::new(ARG_TIMEOUT)
                 .long(ARG_TIMEOUT)
-                .short("T")
+                .short('T')
                 .takes_value(true)
                 .default_value("1000")
                 .required(false)
                 .help("Timeout in ms to wait for response before determening port as closed/firewalled")
         )
-        .arg(clap::Arg::with_name(ARG_JSON)
+        .arg(clap::Arg::new(ARG_JSON)
             .long(ARG_JSON)
-            .short("j")
+            .short('j')
             .takes_value(true)
             .required(false)
             .help("Write output as JSON into given file, - to write to stdout")
         )
-        .arg(clap::Arg::with_name(ARG_CONFIG_FILE)
+        .arg(clap::Arg::new(ARG_CONFIG_FILE)
             .long(ARG_CONFIG_FILE)
-            .short("C")
+            .short('C')
             .takes_value(true)
             .required(false)
             .help("Read configuration from given JSON file")
         )
-        .arg(clap::Arg::with_name(ARG_RETRY_ON_ERROR)
+        .arg(clap::Arg::new(ARG_RETRY_ON_ERROR)
             .long(ARG_RETRY_ON_ERROR)
-            .short("R")
+            .short('R')
             .takes_value(false)
             .required(false)
             .help("Retry scan a few times on (possible transient) network error")
-        ).arg(clap::Arg::with_name(ARG_TRY_COUNT)
+        ).arg(clap::Arg::new(ARG_TRY_COUNT)
             .long(ARG_TRY_COUNT)
-            .short("r")
+            .short('r')
             .takes_value(true)
             .required(false)
             .default_value("2")
             .help("Number of times to try a port which receives no response (including the initial try)")
-        ).arg(clap::Arg::with_name(ARG_VERBOSE)
+        ).arg(clap::Arg::new(ARG_VERBOSE)
             .long(ARG_VERBOSE)
-            .short("v")
+            .short('v')
             .takes_value(false)
             .required(false)
             .help("Verbose output")
-        ).arg(clap::Arg::with_name(ARG_READ_BANNER)
+        ).arg(clap::Arg::new(ARG_READ_BANNER)
             .long(ARG_READ_BANNER)
-            .short("B")
+            .short('B')
             .takes_value(false)
             .required(false)
             .help("Try to read up to read-banner-size bytes (with read-banner-timeout) when connection is established")
-        ).arg(clap::Arg::with_name(ARG_READ_BANNER_TIMEOUT)
+        ).arg(clap::Arg::new(ARG_READ_BANNER_TIMEOUT)
             .long(ARG_READ_BANNER_TIMEOUT)
             .takes_value(true)
             .default_value("1000")
             .required(false)
             .help("Timeout in ms to wait for when reading banner from open port")
-        ).arg(clap::Arg::with_name(ARG_READ_BANNER_SIZE)
+        ).arg(clap::Arg::new(ARG_READ_BANNER_SIZE)
             .long(ARG_READ_BANNER_SIZE)
             .takes_value(true)
             .default_value("256")
@@ -421,7 +421,7 @@ where
     }
 }
 
-impl<'a> TryFrom<clap::ArgMatches<'a>> for Config {
+impl TryFrom<clap::ArgMatches> for Config {
     type Error = Error;
 
     fn try_from(value: clap::ArgMatches) -> Result<Self, Self::Error> {
@@ -755,7 +755,7 @@ mod tests {
             "1024",
         ];
 
-        let app = build_commandline_args().setting(clap::AppSettings::NoBinaryName);
+        let app = build_commandline_args().no_binary_name(true);
         let m = app.get_matches_from(cmdline);
         let cfg = Config::try_from(m).unwrap();
         assert!(cfg.verify().is_ok());
@@ -870,7 +870,7 @@ mod tests {
             };
 
             let m = build_commandline_args()
-                .setting(clap::AppSettings::NoBinaryName)
+                .no_binary_name(true)
                 .get_matches_from(t.arg);
 
             let new_cfg = cfg.override_with(&m).unwrap();
@@ -1006,7 +1006,7 @@ mod tests {
         let empty_cmdline: Vec<&str> = Vec::new();
 
         let m = build_commandline_args()
-            .setting(clap::AppSettings::NoBinaryName)
+            .no_binary_name(true)
             .get_matches_from(&empty_cmdline);
 
         let mut new_cfg = cfg.override_with(&m).unwrap();
@@ -1049,7 +1049,7 @@ mod tests {
         // we need to parse empty command line to set the
         // defaults with override_with()
 
-        let app = build_commandline_args().setting(clap::AppSettings::NoBinaryName);
+        let app = build_commandline_args().no_binary_name(true);
         let vec: Vec<String> = vec![];
         let m = app.get_matches_from(vec);
 
