@@ -112,14 +112,14 @@ async fn main() {
 
     let app = config::build_commandline_args();
 
-    let matches = match app.get_matches_safe() {
+    let matches = match app.try_get_matches() {
         Ok(m) => m,
-        Err(e) => match e.kind {
-            clap::ErrorKind::HelpDisplayed | clap::ErrorKind::VersionDisplayed => {
-                println!("{}", e.message);
+        Err(e) => match e.kind() {
+            clap::ErrorKind::DisplayHelp | clap::ErrorKind::DisplayVersion => {
+                println!("{}", e);
                 exit_error(None);
             }
-            _ => exit_error(Some(e.message)),
+            _ => exit_error(Some(e.to_string())),
         },
     };
 
