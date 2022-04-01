@@ -270,7 +270,7 @@ fn deserialize_target<'de, D>(des: D) -> Result<Vec<cidr::IpCidr>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(deserialize_from_string(ARG_TARGET, des, parse_addresses)?)
+    deserialize_from_string(ARG_TARGET, des, parse_addresses)
 }
 
 /// Deserialize 'excludes' value from JSON
@@ -278,11 +278,7 @@ fn deserialize_exclude<'de, D>(des: D) -> Result<Vec<IpAddr>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(deserialize_from_string(
-        ARG_EXCLUDE,
-        des,
-        parse_single_addresses,
-    )?)
+    deserialize_from_string(ARG_EXCLUDE, des, parse_single_addresses)
 }
 
 /// Deserialize 'ports' value from JSON

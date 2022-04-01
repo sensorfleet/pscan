@@ -89,9 +89,9 @@ mod tests {
 
         let hosts: Vec<HostRange> = sr.hosts().collect();
         assert_eq!(hosts.len(), 256);
-        for i in 0..256 {
+        for (i, range) in hosts.iter().enumerate() {
             let addrstr = format!("192.168.1.{}", i);
-            assert_eq!(hosts[i].host, addrstr.parse::<IpAddr>().unwrap())
+            assert_eq!(range.host, addrstr.parse::<IpAddr>().unwrap())
         }
     }
 

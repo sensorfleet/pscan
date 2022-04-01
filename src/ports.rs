@@ -284,11 +284,9 @@ mod tests {
         assert_eq!(r.port_count(), 65535);
         let mut ranges = r.collect::<Vec<PortIterator>>();
         assert_eq!(ranges.len(), 656);
-        let mut idx = 0;
-        for i in (1..65535).step_by(100) {
+        for (idx, i) in (1..65535).step_by(100).enumerate() {
             let end = if idx < 655 { i + 99 } else { 65535 };
             check_elems_range(ranges.get_mut(idx).unwrap(), i..=end);
-            idx += 1;
         }
     }
 

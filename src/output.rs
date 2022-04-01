@@ -31,6 +31,7 @@ pub struct HostInfo {
 }
 
 /// Container for banners read from open ports
+#[derive(Default)]
 struct Banners {
     values: HashMap<u16, Vec<u8>>,
 }
@@ -63,14 +64,6 @@ impl Serialize for Banners {
             map.serialize_entry(&serialized_k, &serialized_data)?;
         }
         map.end()
-    }
-}
-
-impl Default for Banners {
-    fn default() -> Self {
-        Self {
-            values: Default::default(),
-        }
     }
 }
 

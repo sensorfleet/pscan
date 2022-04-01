@@ -628,13 +628,10 @@ mod tests {
                         assert_eq!(status.address, addr2);
                         assert!(status.port == 80 || status.port == 22);
                     }
-                    _ => {
-                        assert!(
-                            false,
-                            "Unexpected port state: {:?} for {}:{}",
-                            status.state, status.address, status.port
-                        )
-                    }
+                    _ => panic!(
+                        "Unexpected port state: {:?} for {}:{}",
+                        status.state, status.address, status.port,
+                    ),
                 },
                 ScanInfo::HostScanned(addr) => {
                     if addr == addr1 {
@@ -644,7 +641,7 @@ mod tests {
                         assert!(!addr2_scanned);
                         addr2_scanned = true
                     } else {
-                        assert!(false, "unexpected host {} scanned", addr);
+                        panic!("unexpected host {} scanned", addr);
                     }
                 }
             }
