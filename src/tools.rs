@@ -62,12 +62,18 @@ mod tests {
         let handle1 = future::timeout(Duration::from_secs(1), sem.wait())
             .await
             .unwrap();
-        if let Ok(_) = future::timeout(Duration::from_secs(1), sem.wait()).await {
-            assert!(false) // Expecting timeout as we already have one handle
+        if future::timeout(Duration::from_secs(1), sem.wait())
+            .await
+            .is_ok()
+        {
+            panic!("expected timeout") // Expecting timeout as we already have one handle
         }
         handle1.signal();
-        if let Err(_) = future::timeout(Duration::from_secs(1), sem.wait()).await {
-            assert!(false) // now we should be able to take the semaphore
+        if future::timeout(Duration::from_secs(1), sem.wait())
+            .await
+            .is_err()
+        {
+            panic!("expected timeout") // now we should be able to take the semaphore
         }
     }
 }
