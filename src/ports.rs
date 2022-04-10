@@ -4,13 +4,21 @@ use std::fmt::Display;
 use std::ops::RangeInclusive;
 
 /// Continuous port range.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Prange {
     Range((u16, u16)), // range of continous ports from min to max, inclusive
     Atom(u16),         // signle port
 }
 
 impl Prange {
+    fn create(min: u16, max: u16) -> Prange {
+        if min == max {
+            Prange::Atom(min)
+        } else {
+            Prange::Range((min, max))
+        }
+    }
+
     /// Get the smallest port number
     fn min(&self) -> u16 {
         match self {
@@ -32,6 +40,26 @@ impl Prange {
         match self {
             Prange::Range((min, max)) => max - min + 1,
             Prange::Atom(_) => 1,
+        }
+    }
+
+    // Merge this range to other, if possible. Returns merged range or None
+    // if ranges could not be merged.
+    fn merge(&self, other: &Self) -> Option<Self> {
+        let (min, max, omin, omax) = (self.min(), self.max(), other.min(), other.max());
+
+        if max >= omin && max <= omax
+            || omax >= min && omax <= max
+            || min + 1 == omin
+            || omin + 1 == min
+            || max + 1 == omax
+            || omax + 1 == max
+            || max + 1 == omin
+            || omax + 1 == min
+        {
+            Some(Prange::create(min.min(omin), max.max(omax)))
+        } else {
+            None
         }
     }
 }
@@ -111,7 +139,7 @@ fn parse_single_range(val: &str) -> Result<Prange, Error> {
     if min > max {
         return Err("First range value needs to be smaller than the last".into());
     }
-    Ok(Prange::Range((min, max)))
+    Ok(Prange::create(min, max))
 }
 
 impl TryFrom<&str> for PortRange {
@@ -122,14 +150,30 @@ impl TryFrom<&str> for PortRange {
         } else {
             vec![val]
         };
-        let mut ranges = Vec::with_capacity(inputs.len());
+        let mut parsed_ranges = Vec::with_capacity(inputs.len());
         for s in inputs {
             if !s.contains('-') {
-                ranges.push(Prange::Atom(s.trim().parse()?));
+                parsed_ranges.push(Prange::Atom(s.trim().parse()?));
             } else {
-                ranges.push(parse_single_range(s.trim())?);
+                parsed_ranges.push(parse_single_range(s.trim())?);
             }
         }
+        let mut ranges = Vec::with_capacity(parsed_ranges.len());
+        // sort and merge ranges, removes duplicates
+        parsed_ranges.sort_unstable_by_key(|k| k.min());
+        let mut curr = parsed_ranges.remove(0);
+        for r in parsed_ranges.drain(0..) {
+            if let Some(merged) = curr.merge(&r) {
+                curr = merged;
+            } else {
+                // could not merge current anymore, append it to final set of
+                // ports
+                ranges.push(curr);
+                curr = r;
+            }
+        }
+        ranges.push(curr);
+
         let initial_index = ranges[0].min();
 
         Ok(PortRange {
@@ -231,6 +275,7 @@ impl fmt::Debug for PortIterator {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn check_elems(r: &mut PortIterator, expected: &[u16]) {
@@ -310,9 +355,201 @@ mod tests {
         assert_eq!(r.port_count(), 119);
         let mut ranges = r.collect::<Vec<PortIterator>>();
         let mut expected1 = vec![22, 80];
-        expected1.append(&mut (8000..=8090).collect());
-        expected1.append(&mut (4000..=4006).collect());
+        expected1.append(&mut (4000..=4025).collect());
+        expected1.append(&mut (8000..=8071).collect());
         check_elems(ranges.get_mut(0).unwrap(), &expected1);
-        check_elems_range(ranges.get_mut(1).unwrap(), 4007..=4025);
+        check_elems_range(ranges.get_mut(1).unwrap(), 8072..=8090);
+    }
+
+    #[test]
+    fn test_merge() {
+        struct Case {
+            name: &'static str,
+            input: (Prange, Prange),
+            expected: Option<Prange>,
+        }
+        let cases: [Case; 22] = [
+            Case {
+                name: "same-atom",
+                input: (Prange::Atom(2), Prange::Atom(2)),
+                expected: Some(Prange::Atom(2)),
+            },
+            Case {
+                name: "adjacent-atom",
+                input: (Prange::Atom(1), Prange::Atom(2)),
+                expected: Some(Prange::create(1, 2)),
+            },
+            Case {
+                name: "adjacent-atom2",
+                input: (Prange::Atom(2), Prange::Atom(1)),
+                expected: Some(Prange::create(1, 2)),
+            },
+            Case {
+                name: "distinct-atom",
+                input: (Prange::Atom(2), Prange::Atom(4)),
+                expected: None,
+            },
+            Case {
+                name: "adjacent-range",
+                input: (Prange::Atom(2), Prange::create(3, 6)),
+                expected: Some(Prange::create(2, 6)),
+            },
+            Case {
+                name: "adjacent-range2",
+                input: (Prange::Atom(7), Prange::create(3, 6)),
+                expected: Some(Prange::create(3, 7)),
+            },
+            Case {
+                name: "adjacent-range3",
+                input: (Prange::create(3, 6), Prange::Atom(2)),
+                expected: Some(Prange::create(2, 6)),
+            },
+            Case {
+                name: "adjacent-range4",
+                input: (Prange::create(3, 6), Prange::Atom(7)),
+                expected: Some(Prange::create(3, 7)),
+            },
+            Case {
+                name: "atom-in-range",
+                input: (Prange::create(3, 6), Prange::Atom(5)),
+                expected: Some(Prange::create(3, 6)),
+            },
+            Case {
+                name: "atom-in-range2",
+                input: (Prange::Atom(5), Prange::create(3, 6)),
+                expected: Some(Prange::create(3, 6)),
+            },
+            Case {
+                name: "adjacent-range",
+                input: (Prange::create(1, 5), Prange::create(6, 10)),
+                expected: Some(Prange::create(1, 10)),
+            },
+            Case {
+                name: "adjacent-range2",
+                input: (Prange::create(6, 10), Prange::create(1, 5)),
+                expected: Some(Prange::create(1, 10)),
+            },
+            Case {
+                name: "adjacent-range3",
+                input: (Prange::create(11, 15), Prange::create(6, 10)),
+                expected: Some(Prange::create(6, 15)),
+            },
+            Case {
+                name: "adjacent-range4",
+                input: (Prange::create(6, 10), Prange::create(11, 15)),
+                expected: Some(Prange::create(6, 15)),
+            },
+            Case {
+                name: "overlapping-range",
+                input: (Prange::create(3, 6), Prange::create(4, 8)),
+                expected: Some(Prange::create(3, 8)),
+            },
+            Case {
+                name: "overlapping-range2",
+                input: (Prange::create(5, 10), Prange::create(4, 8)),
+                expected: Some(Prange::create(4, 10)),
+            },
+            Case {
+                name: "overlapping-range3",
+                input: (Prange::create(4, 8), Prange::create(3, 6)),
+                expected: Some(Prange::create(3, 8)),
+            },
+            Case {
+                name: "overlapping-range4",
+                input: (Prange::create(4, 8), Prange::create(5, 10)),
+                expected: Some(Prange::create(4, 10)),
+            },
+            Case {
+                name: "distinct range",
+                input: (Prange::create(4, 8), Prange::create(10, 15)),
+                expected: None,
+            },
+            Case {
+                name: "contained-range",
+                input: (Prange::create(3, 10), Prange::create(4, 8)),
+                expected: Some(Prange::create(3, 10)),
+            },
+            Case {
+                name: "contained-range2",
+                input: (Prange::create(4, 8), Prange::create(3, 10)),
+                expected: Some(Prange::create(3, 10)),
+            },
+            Case {
+                name: "same-range",
+                input: (Prange::create(4, 8), Prange::create(4, 8)),
+                expected: Some(Prange::create(4, 8)),
+            },
+        ];
+
+        for c in cases {
+            let result = c.input.0.merge(&c.input.1);
+            if result != c.expected {
+                panic!("{} : expected {:?}, got {:?}", c.name, c.expected, result)
+            }
+        }
+    }
+
+    #[test]
+    fn test_merged_ranges() {
+        struct Case<'a> {
+            name: &'static str,
+            input: &'static str,
+            expected: &'a [Prange],
+        }
+        let cases: &[Case] = &[
+            Case {
+                name: "simple",
+                input: "1-22",
+                expected: &[Prange::create(1, 22)],
+            },
+            Case {
+                name: "dual ports",
+                input: "22,80,22",
+                expected: &[Prange::create(22, 22), Prange::create(80, 80)],
+            },
+            Case {
+                name: "only dual ports",
+                input: "22, 22",
+                expected: &[Prange::create(22, 22)],
+            },
+            Case {
+                name: "merge to range",
+                input: "1-100, 22, 80",
+                expected: &[Prange::create(1, 100)],
+            },
+            Case {
+                name: "merge ranges",
+                input: "1-100, 8080, 80-120",
+                expected: &[Prange::create(1, 120), Prange::create(8080, 8080)],
+            },
+            Case {
+                name: "multiple to merge",
+                input: "1-100, 22, 80, 90, 99, 120-140, 130, 135-138, 8080",
+                expected: &[
+                    Prange::create(1, 100),
+                    Prange::create(120, 140),
+                    Prange::create(8080, 8080),
+                ],
+            },
+        ];
+
+        for c in cases {
+            let result = PortRange::try_from(c.input).unwrap();
+            assert_eq!(
+                result.ranges.len(),
+                c.expected.len(),
+                "test {}: expected {} elements, got {}",
+                c.name,
+                result.ranges.len(),
+                c.expected.len()
+            );
+            for (i, r) in result.ranges.iter().enumerate() {
+                assert_eq!(
+                    *r, c.expected[i],
+                    "test {}: result[{}] expected {:?}, got {:?}",
+                    c.name, i, c.expected[i], *r
+                );
+            }
+        }
     }
 }
