@@ -1,7 +1,6 @@
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Display;
-use std::ops::RangeInclusive;
 
 /// Continuous port range.
 #[derive(Clone, PartialEq)]
@@ -81,8 +80,6 @@ impl fmt::Debug for Prange {
 #[derive(Clone)]
 pub struct PortRange {
     ranges: Vec<Prange>, // continuous port ranges making this range
-    step: u16,           // number of ports to return for a step
-    curr: (u16, u16),    // current status of iterator, (index in ranges, current port)
 }
 
 /// Error returned if port range can not be parsed.
@@ -121,10 +118,24 @@ impl PortRange {
         count
     }
 
-    /// Adjust the step, that is, maximum number of ports contained in each
-    /// returned PortIterator.
-    pub fn adjust_step(&mut self, step: u16) {
-        self.step = step;
+    /// Get port at given index in port range.
+    /// Panics if given index is out-of-range
+    pub fn get(&self, index: usize) -> u16 {
+        if index >= self.port_count() as usize {
+            panic!("requested index out of bounds")
+        }
+        let mut curr = 0;
+        for r in &self.ranges {
+            if curr == index {
+                return r.min();
+            } else if curr + (r.count() as usize) <= index {
+                curr += r.count() as usize;
+                continue;
+            } else {
+                return r.min() + (index - curr) as u16;
+            }
+        }
+        panic!("requested index out of bounds")
     }
 }
 
@@ -174,102 +185,7 @@ impl TryFrom<&str> for PortRange {
         }
         ranges.push(curr);
 
-        let initial_index = ranges[0].min();
-
-        Ok(PortRange {
-            ranges,
-            step: 100,
-            curr: (0, initial_index),
-        })
-    }
-}
-
-/// select next range to scan.
-fn select_range(range: &Prange, start: u16, step: u16) -> (u16, u16) {
-    let end = {
-        if start as u32 + (step - 1) as u32 >= range.max() as u32 {
-            range.max()
-        } else {
-            start + step - 1
-        }
-    };
-    (start, end)
-}
-
-impl Iterator for PortRange {
-    type Item = PortIterator;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut count = 0;
-        let mut ranges = Vec::new();
-        loop {
-            if self.curr.0 >= self.ranges.len() as u16 {
-                break;
-            }
-            let current_range = &self.ranges[self.curr.0 as usize];
-            let start = if self.curr.1 == 0 {
-                // start from the start of the range
-                // if we changed to new range on last iteration, we have reset
-                // the curr.1 to 0 without knowing where to actually start
-                current_range.min()
-            } else {
-                self.curr.1
-            };
-
-            let (min, max) = select_range(current_range, start, self.step - count);
-            if max == current_range.max() {
-                self.curr = (self.curr.0 + 1, 0);
-            } else {
-                self.curr.1 = max + 1;
-            }
-            ranges.push(min..=max);
-            count += max - min + 1;
-            if count >= self.step {
-                break;
-            }
-        }
-        if !ranges.is_empty() {
-            Some(PortIterator::new(ranges))
-        } else {
-            None
-        }
-    }
-}
-
-/// Iterator returned by `PortRange` which can be used to iterate single port
-/// values.
-#[derive(Clone)]
-pub struct PortIterator {
-    ranges: Vec<RangeInclusive<u16>>,
-    idx: usize,
-}
-
-impl PortIterator {
-    /// Create new iterator which is used to iterator given ranges
-    fn new(ranges: Vec<RangeInclusive<u16>>) -> Self {
-        PortIterator { ranges, idx: 0 }
-    }
-}
-
-impl Iterator for PortIterator {
-    type Item = u16;
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.idx < self.ranges.len() {
-            let next = self.ranges[self.idx].next();
-            if next.is_none() {
-                // This range is done, move to next
-                self.idx += 1;
-                continue;
-            }
-            return next;
-        }
-        None
-    }
-}
-
-impl fmt::Debug for PortIterator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.ranges.iter()).finish()
+        Ok(PortRange { ranges })
     }
 }
 
@@ -278,22 +194,16 @@ mod tests {
 
     use super::*;
 
-    fn check_elems(r: &mut PortIterator, expected: &[u16]) {
+    fn check_elems(r: impl Iterator<Item = u16>, expected: &[u16]) {
         let values: Vec<u16> = r.collect();
         assert_eq!(expected, values)
-    }
-
-    fn check_elems_range(r: &mut PortIterator, expected: RangeInclusive<u16>) {
-        let expected_data = expected.collect::<Vec<u16>>();
-        let values: Vec<u16> = r.collect();
-        assert_eq!(expected_data, values)
     }
 
     fn test_simple_range(input: &str, expected: &[u16]) {
         let r = PortRange::try_from(input).unwrap();
         assert_eq!(r.port_count() as usize, expected.len());
         check_elems(
-            r.collect::<Vec<PortIterator>>().get_mut(0).unwrap(),
+            (0..r.port_count() as usize).into_iter().map(|i| r.get(i)),
             expected,
         );
     }
@@ -307,58 +217,33 @@ mod tests {
     }
 
     #[test]
-    fn multiple_steps() {
-        let r = PortRange::try_from("1-250").unwrap();
-        assert_eq!(r.port_count(), 250);
-        let mut ranges = r.collect::<Vec<PortIterator>>();
-        assert_eq!(ranges.len(), 3);
-        check_elems(ranges.get_mut(0).unwrap(), &(1..101).collect::<Vec<u16>>());
-        check_elems(
-            ranges.get_mut(1).unwrap(),
-            &(101..201).collect::<Vec<u16>>(),
-        );
-        check_elems(
-            ranges.get_mut(2).unwrap(),
-            &(201..251).collect::<Vec<u16>>(),
-        )
-    }
-
-    #[test]
     fn test_full_range() {
         let r = PortRange::try_from("1-65535").unwrap();
         assert_eq!(r.port_count(), 65535);
-        let mut ranges = r.collect::<Vec<PortIterator>>();
-        assert_eq!(ranges.len(), 656);
-        for (idx, i) in (1..65535).step_by(100).enumerate() {
-            let end = if idx < 655 { i + 99 } else { 65535 };
-            check_elems_range(ranges.get_mut(idx).unwrap(), i..=end);
-        }
+        check_elems(
+            (0..r.port_count() as usize).map(|i| r.get(i)),
+            &(1..=65535).collect::<Vec<u16>>(),
+        );
     }
 
     #[test]
     fn complex_steps() {
-        let mut r = PortRange::try_from("1-10,20-30,41-42").unwrap();
+        let r = PortRange::try_from("1-10,20-30,41-42").unwrap();
         assert_eq!(r.port_count(), 23);
-        r.adjust_step(5);
-        let mut ranges = r.collect::<Vec<PortIterator>>();
-        assert_eq!(ranges.len(), 5);
-        check_elems_range(ranges.get_mut(0).unwrap(), 1..=5);
-        check_elems_range(ranges.get_mut(1).unwrap(), 6..=10);
-        check_elems_range(ranges.get_mut(2).unwrap(), 20..=24);
-        check_elems_range(ranges.get_mut(3).unwrap(), 25..=29);
-        check_elems(ranges.get_mut(4).unwrap(), &[30, 41, 42]);
+        let mut expected = Vec::new();
+        expected.append(&mut (1..11).collect::<Vec<u16>>());
+        expected.append(&mut (20..31).collect::<Vec<u16>>());
+        expected.append(&mut (41..43).collect::<Vec<u16>>());
+        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), &expected);
     }
 
     #[test]
     fn ranges_and_atoms() {
         let r = PortRange::try_from("22,80,8000-8090,4000-4025").unwrap();
-        assert_eq!(r.port_count(), 119);
-        let mut ranges = r.collect::<Vec<PortIterator>>();
         let mut expected1 = vec![22, 80];
         expected1.append(&mut (4000..=4025).collect());
-        expected1.append(&mut (8000..=8071).collect());
-        check_elems(ranges.get_mut(0).unwrap(), &expected1);
-        check_elems_range(ranges.get_mut(1).unwrap(), 8072..=8090);
+        expected1.append(&mut (8000..=8090).collect());
+        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), &expected1);
     }
 
     #[test]

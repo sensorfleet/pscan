@@ -679,8 +679,6 @@ mod tests {
 
     use cidr::{Cidr, IpCidr};
 
-    use crate::ports::PortIterator;
-
     use super::*;
 
     #[test]
@@ -788,9 +786,11 @@ mod tests {
                 name: "ports",
                 arg: &["--ports", "22"],
                 check: Box::new(|c| {
-                    let mut p = c.ports.unwrap().collect::<Vec<PortIterator>>();
+                    let p = (0..c.ports.as_ref().unwrap().port_count() as usize)
+                        .into_iter()
+                        .map(|i| c.ports.as_ref().unwrap().get(i));
                     assert_eq!(p.len(), 1);
-                    let ports = p.pop().unwrap().collect::<Vec<u16>>();
+                    let ports = p.collect::<Vec<u16>>();
                     assert_eq!(ports.len(), 1);
                     ports[0] == 22
                 }),
@@ -898,9 +898,10 @@ mod tests {
         assert_eq!(addrs.len(), 1);
         assert_eq!(addrs[0], IpCidr::from_str("192.168.1.0/24").unwrap());
 
-        let mut pi = cfg.ports.unwrap().collect::<Vec<PortIterator>>();
-        assert_eq!(pi.len(), 1);
-        let ports = pi.pop().unwrap().collect::<Vec<u16>>();
+        let pi = (0..cfg.ports.as_ref().unwrap().port_count() as usize)
+            .into_iter()
+            .map(|i| cfg.ports.as_ref().unwrap().get(i));
+        let ports = pi.collect::<Vec<u16>>();
         assert_eq!(ports.len(), 2);
         assert!(ports[0] == 1 && ports[1] == 2);
 

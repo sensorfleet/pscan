@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
-use crate::ports::PortIterator;
+use crate::ports::PortRange;
 use crate::range::{HostRange, ScanRange};
 use crate::tools::{SemHandle, Semaphore};
 
@@ -389,13 +389,15 @@ impl Scanner {
         debug!("Scanning with {} ports per stripe", ports_per_thread);
 
         let mut waiters = FuturesUnordered::new();
-        for mut hostit in range.hosts() {
-            hostit.ports.adjust_step(ports_per_thread);
+        for hostit in range.hosts() {
+            // hostit.ports.adjust_step(ports_per_thread);
             if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
                 warn!("Stopping hostloop due to signal");
                 break;
             }
-            let h = self.scan_host(hostit, atx.clone()).await;
+            let h = self
+                .scan_host(hostit, atx.clone(), ports_per_thread as usize)
+                .await;
             waiters.push(task::spawn(h.wait()))
         }
         // all host tasks have been spawned
@@ -412,16 +414,30 @@ impl Scanner {
     /// Do a scan for single host. The given iterator is used to get ports
     /// to scan and results are sent using the `tx` `Sender`.
     /// Returns `Host` that can be used wait for scan to finish.
-    async fn scan_host(&self, host: HostRange, tx: Arc<Sender<ScanInfo>>) -> Host {
+    async fn scan_host(
+        &self,
+        host: HostRange,
+        tx: Arc<Sender<ScanInfo>>,
+        stripe_len: usize,
+    ) -> Host {
         debug!("Starting to scan host {}", host.host);
         let tasks = FuturesUnordered::new();
+        let count = host.ports.port_count() as usize;
         let ctx = HostContext {
             up: Arc::new(AtomicBool::new(true)),
             stop_signal: self.stop.clone(),
-            tx: tx.clone(),
+            tx,
+            ports: Arc::new(host.ports),
         };
 
-        for stripe in host.ports {
+        for stripe in (0..count).step_by(stripe_len).map(|i| {
+            let end = if i + stripe_len <= count {
+                i + stripe_len
+            } else {
+                count
+            };
+            i as u16..(end as u16)
+        }) {
             // this is the gatekeeper making sure we do not start too many
             // concurrent tasks
             let semh = self.sem.wait().await;
@@ -454,6 +470,7 @@ struct HostContext {
     up: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     tx: Arc<Sender<ScanInfo>>,
+    ports: Arc<PortRange>,
     // max_timeout: Duration,
 }
 
@@ -509,15 +526,15 @@ impl Host {
 /// to scan.
 async fn scan_port_stripe(
     addr: IpAddr,
-    stripe: PortIterator,
+    stripe: impl Iterator<Item = u16>,
     typ: ScanType,
     params: ScanParameters,
     sem: SemHandle,
     mut ctx: HostContext,
 ) -> Result<(), ScanError> {
-    debug!("Starting stripe {:?} for {}", stripe, addr);
+    // debug!("Starting stripe {:?} for {}", stripe, addr);
     let mut ret = Ok(());
-    for p in stripe {
+    for p in stripe.map(|i| ctx.ports.get(i as usize)) {
         if !ctx.keep_running() {
             break;
         }

@@ -176,7 +176,7 @@ async fn main() {
         .spawn(collect_results(rx, verbose))
     {
         let scan = scanner::Scanner::create(params, stop.clone());
-        let (infos, scanstatus) = col.join(scan.scan(cfg.get_range().unwrap(), tx)).await;
+        let (infos, scanstatus) = col.join(scan.scan(range, tx)).await;
         if let Err(e) = scanstatus {
             if e.is_fatal() {
                 // fatal error, results can not be trusted.
