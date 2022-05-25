@@ -7,7 +7,7 @@ use crate::ports::PortRange;
 /// HostRange holds ports to scan for each host in `ScanRange`.
 pub struct HostRange {
     pub host: IpAddr,
-    pub ports: PortRange,
+    // pub ports: PortRange,
 }
 
 ///ScanRnge contains information which hosts and ports on those hosts to scan
@@ -15,7 +15,7 @@ pub struct HostRange {
 /// scan. `HostRange` can be used to get iterators for ports to scan on
 /// that host.
 pub struct ScanRange<'a> {
-    ports: PortRange,
+    pub ports: PortRange,
     addrs: &'a [IpCidr],
     excludes: &'a [IpAddr],
 }
@@ -48,7 +48,7 @@ impl ScanRange<'_> {
             .filter(move |a| !self.excludes.contains(a))
             .map(move |a| HostRange {
                 host: a,
-                ports: self.ports.clone(),
+                // ports: self.ports.clone(),
             });
     }
 }

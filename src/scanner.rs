@@ -2,18 +2,16 @@ use async_std::channel::Sender;
 use async_std::future;
 use async_std::io::{ErrorKind, ReadExt};
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
-use async_std::sync::{Arc, Mutex};
-use async_std::task::{self, JoinHandle};
-use futures::stream::{FuturesUnordered, StreamExt};
+use async_std::sync::{Arc, Mutex, RwLock};
+use async_std::task;
 use futures::Future;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
-use crate::ports::PortRange;
-use crate::range::{HostRange, ScanRange};
-use crate::tools::{SemHandle, Semaphore};
+use crate::range::ScanRange;
+use crate::tools::Semaphore;
 
 // OS -specific error codes for error conditions
 #[cfg(target_os = "macos")]
@@ -36,9 +34,6 @@ mod os_errcodes {
 }
 
 static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
-
-/// Maximum number of ponts on single stripe
-static MAX_STRIPE_LEN: u16 = 100;
 
 /// Detected state of a port
 #[derive(Debug)]
@@ -337,7 +332,7 @@ impl Default for ScanParameters {
 
 ///Scanner can be used to scan for open TCP ports.
 pub struct Scanner {
-    sem: Semaphore,         // semaphore controlling number of concurrent tasks
+    sem: Arc<Semaphore>,    // semaphore controlling number of concurrent tasks
     r#type: ScanType,       // type of scan to perform
     params: ScanParameters, // parameters for scans
     stop: Arc<AtomicBool>,  // flag indicating that scanning should stop
@@ -357,7 +352,7 @@ impl Scanner {
         };
 
         Scanner {
-            sem: Semaphore::new(params.concurrent_scans),
+            sem: Arc::new(Semaphore::new(params.concurrent_scans)),
             r#type: t,
             params,
             stop,
@@ -371,7 +366,7 @@ impl Scanner {
         map: HashMap<SocketAddr, Result<PortState, ScanError>>,
     ) -> Scanner {
         Scanner {
-            sem: Semaphore::new(params.concurrent_scans),
+            sem: Arc::new(Semaphore::new(params.concurrent_scans)),
             r#type: ScanType::Test(Arc::new(Mutex::new(map))),
             params,
             stop,
@@ -380,191 +375,108 @@ impl Scanner {
 
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
-        let ports_per_thread = u16::max(
-            range.get_port_count() / self.params.concurrent_scans as u16,
-            1,
-        )
-        .min(MAX_STRIPE_LEN);
         let atx = Arc::new(tx);
-        debug!("Scanning with {} ports per stripe", ports_per_thread);
+        let hosts = range.hosts().map(|r| Arc::new(RwLock::new(Host{addr: r.host, up: true}))).collect::<Vec<Arc<RwLock<Host>>>>();
 
-        let mut waiters = FuturesUnordered::new();
-        for hostit in range.hosts() {
-            // hostit.ports.adjust_step(ports_per_thread);
-            if self.stop.load(std::sync::atomic::Ordering::SeqCst) {
-                warn!("Stopping hostloop due to signal");
-                break;
-            }
-            let h = self
-                .scan_host(hostit, atx.clone(), ports_per_thread as usize)
-                .await;
-            waiters.push(task::spawn(h.wait()))
-        }
-        // all host tasks have been spawned
-        debug!("Waiting for all hosts to complete");
-        let mut retval = Ok(());
-        while let Some(ret) = waiters.next().await {
-            if let Err(e) = ret {
-                retval = Err(e)
-            }
-        }
-        retval
-    }
+        // return value, this gets set from task if fatal error occurs and w
+        // need to indicate the error. Needs to be protected by mutex since
+        // this might be accessed from scanning task.
+        let rv = Arc::new(Mutex::new(None));
 
-    /// Do a scan for single host. The given iterator is used to get ports
-    /// to scan and results are sent using the `tx` `Sender`.
-    /// Returns `Host` that can be used wait for scan to finish.
-    async fn scan_host(
-        &self,
-        host: HostRange,
-        tx: Arc<Sender<ScanInfo>>,
-        stripe_len: usize,
-    ) -> Host {
-        debug!("Starting to scan host {}", host.host);
-        let tasks = FuturesUnordered::new();
-        let count = host.ports.port_count() as usize;
-        let ctx = HostContext {
-            up: Arc::new(AtomicBool::new(true)),
-            stop_signal: self.stop.clone(),
-            tx,
-            ports: Arc::new(host.ports),
-        };
-
-        for stripe in (0..count).step_by(stripe_len).map(|i| {
-            let end = if i + stripe_len <= count {
-                i + stripe_len
-            } else {
-                count
-            };
-            i as u16..(end as u16)
-        }) {
-            // this is the gatekeeper making sure we do not start too many
-            // concurrent tasks
-            let semh = self.sem.wait().await;
-            if !ctx.keep_running() {
-                // host down, no need to continue further
-                break;
-            }
-            let handle = task::spawn(scan_port_stripe(
-                host.host,
-                stripe,
-                self.r#type.clone(),
-                self.params,
-                semh,
-                ctx.clone(),
-            ));
-            tasks.push(handle);
-        }
-        Host {
-            addr: host.host,
-            tasks,
-            context: ctx,
-        }
-    }
-}
-
-/// Context for scanning a host.
-/// Context is shared between all tasks doing a scan for same host
-#[derive(Clone)]
-struct HostContext {
-    up: Arc<AtomicBool>,
-    stop_signal: Arc<AtomicBool>,
-    tx: Arc<Sender<ScanInfo>>,
-    ports: Arc<PortRange>,
-    // max_timeout: Duration,
-}
-
-impl HostContext {
-    /// Returns true if scanning should still continue.
-    /// Returns `true` stop is requested or host is determined to be down.
-    fn keep_running(&self) -> bool {
-        self.up
-            .fetch_and(!self.stop_signal.load(Ordering::SeqCst), Ordering::SeqCst)
-    }
-
-    /// Indicate that host is down.
-    fn host_down(&self) {
-        self.up.store(false, Ordering::SeqCst);
-    }
-
-    /// Indicate that fatal error has occured during scan.
-    fn fatal(&mut self) {
-        warn!("Setting global stop due to fatal error");
-        self.stop_signal.store(true, Ordering::SeqCst);
-    }
-}
-
-/// Handle returned by `scan_host` which can be used to wait for completion
-/// of a scan.
-struct Host {
-    addr: IpAddr,
-    tasks: FuturesUnordered<JoinHandle<Result<(), ScanError>>>,
-    context: HostContext,
-}
-
-impl Host {
-    /// Wait for scan to complete
-    async fn wait(mut self) -> Result<(), ScanError> {
-        let mut ret = Ok(());
-        while let Some(res) = self.tasks.next().await {
-            if let Err(e) = res {
-                if e.is_fatal() {
-                    ret = Err(e);
+        let last_port = range.ports.get((range.get_port_count()-1) as usize);
+        'outer: for port in (0..range.get_port_count() as usize).map(|i| range.ports.get(i)) {
+            for h in &hosts {
+                let handle = self.sem.wait().await;
+                if self.stop.load(Ordering::SeqCst) {
+                    warn!("Stopping scanning due to signal");
+                    handle.signal();
+                    break 'outer;
                 }
+                let host = h.read().await;
+                if !host.up {
+                    trace!("Host {} not up discarding", host.addr);
+                    handle.signal();
+                    continue;
+                }
+
+                let sa = SocketAddr::new(host.addr, port);
+                drop(host);
+
+                let tx = Arc::clone(&atx);
+                let typ = ScanType::clone(&self.r#type);
+                let h_handle = Arc::clone(h);
+                let s = Arc::clone(&self.stop);
+                let is_last = port == last_port;
+                let r = Arc::clone(&rv);
+
+                task::spawn(async move {
+                    let ret = scan_single(typ, self.params, Arc::clone(&tx), sa).await;
+                    handle.signal();
+                    if let Err(e) = ret {
+                        if !e.is_fatal() {
+                            let mut host_w = h_handle.write().await;
+                            trace!("Marking host {} down", host_w.addr );
+                            if host_w.up {
+                                // indicate that scanning for this host has stopped
+                                if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                                    warn!("Unable to send host scanned indication: {}", e);
+                                }
+                            }
+                            host_w.up = false;
+                        } else {
+                            info!("stopping due to fatal error while scanning");
+                            if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                                warn!("Unable to send host scanned indication: {}", e);
+                            }
+                            let mut ret = r.lock().await;
+                            *ret = Some(e);
+                            s.store(true, Ordering::SeqCst);
+                        }
+                    } else if is_last {
+                        if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                            warn!("Unable to send host scanned indication: {}", e);
+                        }
+                    }
+                });
             }
         }
-        if let Err(e) = self.context.tx.send(ScanInfo::HostScanned(self.addr)).await {
-            warn!("Unable to send scan info: {}", e);
+        debug!("waiting for all tasks to complete");
+        self.sem.wait_empty().await;
+        let r = rv.lock().await.take();
+        match r {
+            Some(e) => Err(e),
+            None => Ok(())
+
         }
-        info!("Host {} scan complete", self.addr);
-        ret
     }
 }
 
-/// This function is run on its own task to perform a scanning for a set of
-/// ports on a given host. The `stripe` iterator is used to get the ports
-/// to scan.
-async fn scan_port_stripe(
+struct Host{
     addr: IpAddr,
-    stripe: impl Iterator<Item = u16>,
+    up: bool
+}
+// do a scan for single port on host
+// Returns Ok if scanning succeeded, Err if there was error preventing the
+// scan to succeed (host was down, could not be reached, etc).
+async fn scan_single(
     typ: ScanType,
     params: ScanParameters,
-    sem: SemHandle,
-    mut ctx: HostContext,
+    tx: Arc<Sender<ScanInfo>>,
+    sa: SocketAddr,
 ) -> Result<(), ScanError> {
-    // debug!("Starting stripe {:?} for {}", stripe, addr);
-    let mut ret = Ok(());
-    for p in stripe.map(|i| ctx.ports.get(i as usize)) {
-        if !ctx.keep_running() {
-            break;
-        }
-        let sa = SocketAddr::new(addr, p);
-        match typ
-            .cycle(
-                sa,
-                ctx.tx.clone(),
-                params.wait_timeout,
-                params.retry_on_error,
-                params.try_count,
-            )
-            .await
-        {
-            Ok(_) => {}
-            Err(e) => {
-                warn!("Terminating stripe for {} due to error: {}", addr, e);
-                if e.is_fatal() {
-                    ctx.fatal();
-                } else {
-                    ctx.host_down();
-                }
-                ret = Err(e);
-                break;
-            }
-        }
+    match typ
+        .cycle(
+            sa,
+            tx,
+            params.wait_timeout,
+            params.retry_on_error,
+            params.try_count,
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
     }
-    sem.signal();
-    trace!("stripe complete for {}", addr);
-    ret
 }
 
 #[cfg(test)]
