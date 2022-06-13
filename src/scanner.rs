@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
+use rand::seq::SliceRandom;
 
 use crate::range::ScanRange;
 use crate::tools::Semaphore;
@@ -140,13 +141,13 @@ where
 
     match c {
         Ok(s) => {
-            info!("port {} Connection succesfull", sa.port());
+            info!("Connection to {} succesfull", sa);
             let data = handler(s, context).await;
             info!("Connection took {}ms", c_time.as_millis());
             Ok(PortState::Open(c_time, data))
         }
         Err(e) => {
-            trace!("Connection failed: {}", e);
+            trace!("Connection to {} failed: {}",sa, e);
             match e.kind() {
                 ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
@@ -255,8 +256,8 @@ impl ScanType {
                         Ok(None)
                     } else {
                         debug!(
-                            "Retrying port {} due to timeout, tried {}/{}",
-                            sa.port(),
+                            "Retrying {} due to timeout, tried {}/{}",
+                            sa,
                             nr_of_tries,
                             try_count
                         );
@@ -264,7 +265,7 @@ impl ScanType {
                     }
                 }
                 PortState::HostDown() => {
-                    info!("Remote host is down");
+                    info!("Remote host {} is down", sa.ip());
                     Err(ScanError::Down(format!("Host {} is down", sa.ip())))
                 }
                 PortState::NetError() => {
@@ -314,6 +315,7 @@ pub struct ScanParameters {
     pub try_count: usize,                // number of times to try if there is no response
     pub read_banner_size: Option<usize>, // number of bytes to read if connection is established
     pub read_banner_timeout: Option<Duration>, // how long to wait for banner
+    pub randomize: bool,
 }
 
 impl Default for ScanParameters {
@@ -326,6 +328,7 @@ impl Default for ScanParameters {
             try_count: 2,
             read_banner_size: None,
             read_banner_timeout: None,
+            randomize: false,
         }
     }
 }
@@ -376,15 +379,23 @@ impl Scanner {
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
-        let hosts = range.hosts().map(|r| Arc::new(RwLock::new(Host{addr: r.host, up: true}))).collect::<Vec<Arc<RwLock<Host>>>>();
+        let mut hosts = range.hosts().map(|a| Arc::new(RwLock::new(Host{addr: a, up: true}))).collect::<Vec<Arc<RwLock<Host>>>>();
+        let mut port_indexes = (0..range.get_port_count() as usize).collect::<Vec<usize>>();
+
+        if self.params.randomize {
+            let mut rng = rand::thread_rng();
+            debug!("Randomizing port and host order");
+            hosts.shuffle(&mut rng);
+            port_indexes.shuffle(&mut rng);
+        }
 
         // return value, this gets set from task if fatal error occurs and w
         // need to indicate the error. Needs to be protected by mutex since
         // this might be accessed from scanning task.
         let rv = Arc::new(Mutex::new(None));
 
-        let last_port = range.ports.get((range.get_port_count()-1) as usize);
-        'outer: for port in (0..range.get_port_count() as usize).map(|i| range.ports.get(i)) {
+        let last_port = range.ports.get(port_indexes[(range.get_port_count()-1) as usize]);
+        'outer: for port in port_indexes.iter().map(|i| range.ports.get(*i)) {
             for h in &hosts {
                 let handle = self.sem.wait().await;
                 if self.stop.load(Ordering::SeqCst) {
@@ -394,7 +405,7 @@ impl Scanner {
                 }
                 let host = h.read().await;
                 if !host.up {
-                    trace!("Host {} not up discarding", host.addr);
+                    trace!("Host {} not up, discarding", host.addr);
                     handle.signal();
                     continue;
                 }
@@ -495,6 +506,7 @@ mod tests {
             try_count: 2,
             read_banner_size: None,
             read_banner_timeout: None,
+            randomize: false
         };
 
         let mut map = HashMap::new();

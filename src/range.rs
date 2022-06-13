@@ -4,12 +4,6 @@ use cidr::{Cidr, IpCidr};
 
 use crate::ports::PortRange;
 
-/// HostRange holds ports to scan for each host in `ScanRange`.
-pub struct HostRange {
-    pub host: IpAddr,
-    // pub ports: PortRange,
-}
-
 ///ScanRnge contains information which hosts and ports on those hosts to scan
 /// Use `hosts` to get iterator which returns `HosIterator` for each host to
 /// scan. `HostRange` can be used to get iterators for ports to scan on
@@ -40,16 +34,12 @@ impl<'a> ScanRange<'a> {
 
 impl ScanRange<'_> {
     /// Get iterator which returns `HostRange` for each host in range
-    pub fn hosts(&'_ self) -> impl Iterator<Item = HostRange> + '_ {
+    pub fn hosts(&'_ self) -> impl Iterator<Item = IpAddr> + '_ {
         return self
             .addrs
             .iter()
             .flat_map(|cidr| cidr.iter())
-            .filter(move |a| !self.excludes.contains(a))
-            .map(move |a| HostRange {
-                host: a,
-                // ports: self.ports.clone(),
-            });
+            .filter(move |a| !self.excludes.contains(a));
     }
 }
 
@@ -72,11 +62,11 @@ mod tests {
 
         let sr = ScanRange::create(&addresses, &excludes, ports);
 
-        let hosts: Vec<HostRange> = sr.hosts().collect();
+        let hosts: Vec<IpAddr> = sr.hosts().collect();
         assert_eq!(hosts.len(), 2);
 
-        assert_eq!(hosts[0].host, "192.168.1.1".parse::<IpAddr>().unwrap());
-        assert_eq!(hosts[1].host, "192.168.1.2".parse::<IpAddr>().unwrap());
+        assert_eq!(hosts[0], "192.168.1.1".parse::<IpAddr>().unwrap());
+        assert_eq!(hosts[1], "192.168.1.2".parse::<IpAddr>().unwrap());
     }
 
     #[test]
@@ -87,11 +77,11 @@ mod tests {
 
         let sr = ScanRange::create(&addresses, &excludes, PortRange::try_from("1-10").unwrap());
 
-        let hosts: Vec<HostRange> = sr.hosts().collect();
+        let hosts: Vec<IpAddr> = sr.hosts().collect();
         assert_eq!(hosts.len(), 256);
-        for (i, range) in hosts.iter().enumerate() {
+        for (i, addr) in hosts.iter().enumerate() {
             let addrstr = format!("192.168.1.{}", i);
-            assert_eq!(range.host, addrstr.parse::<IpAddr>().unwrap())
+            assert_eq!(*addr, addrstr.parse::<IpAddr>().unwrap())
         }
     }
 
@@ -106,7 +96,7 @@ mod tests {
         }
 
         let sr = ScanRange::create(&addresses, &excludes, PortRange::try_from("1-10").unwrap());
-        let hosts: Vec<IpAddr> = sr.hosts().map(|i| i.host).collect();
+        let hosts: Vec<IpAddr> = sr.hosts().collect();
         assert_eq!(hosts.len(), 246);
         for e in excludes {
             assert!(!hosts.contains(&e))
