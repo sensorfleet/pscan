@@ -604,9 +604,9 @@ impl Config {
             }
         };
         let randomize = {
-            if matches.is_present(ARG_RANDOMIZE){
+            if matches.is_present(ARG_RANDOMIZE) {
                 Some(true)
-            } else{
+            } else {
                 self.randomize.or(Some(false))
             }
         };

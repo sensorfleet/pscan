@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use async_std::{channel, task};
 use async_std::sync::Arc;
+use async_std::{channel, task};
 
 /// Simple counting semaphore.
 /// Use Semaphore::new() to get new instance with given capacity,
@@ -35,7 +35,7 @@ impl Semaphore {
 
     /// Wait for Semaphore to be empty, that is, wait for all handles to
     /// be signaled.
-    pub async fn wait_empty(&self)  {
+    pub async fn wait_empty(&self) {
         while !self.ch.is_empty() {
             task::sleep(Duration::from_millis(100)).await;
         }
