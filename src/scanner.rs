@@ -5,11 +5,11 @@ use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use async_std::sync::{Arc, Mutex, RwLock};
 use async_std::task;
 use futures::Future;
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
-use rand::seq::SliceRandom;
 
 use crate::range::ScanRange;
 use crate::tools::Semaphore;
@@ -147,7 +147,7 @@ where
             Ok(PortState::Open(c_time, data))
         }
         Err(e) => {
-            trace!("Connection to {} failed: {}",sa, e);
+            trace!("Connection to {} failed: {}", sa, e);
             match e.kind() {
                 ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
@@ -257,9 +257,7 @@ impl ScanType {
                     } else {
                         debug!(
                             "Retrying {} due to timeout, tried {}/{}",
-                            sa,
-                            nr_of_tries,
-                            try_count
+                            sa, nr_of_tries, try_count
                         );
                         continue;
                     }
@@ -379,7 +377,10 @@ impl Scanner {
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
-        let mut hosts = range.hosts().map(|a| Arc::new(RwLock::new(Host{addr: a, up: true}))).collect::<Vec<Arc<RwLock<Host>>>>();
+        let mut hosts = range
+            .hosts()
+            .map(|a| Arc::new(RwLock::new(Host { addr: a, up: true })))
+            .collect::<Vec<Arc<RwLock<Host>>>>();
         let mut port_indexes = (0..range.get_port_count() as usize).collect::<Vec<usize>>();
 
         if self.params.randomize {
@@ -394,7 +395,9 @@ impl Scanner {
         // this might be accessed from scanning task.
         let rv = Arc::new(Mutex::new(None));
 
-        let last_port = range.ports.get(port_indexes[(range.get_port_count()-1) as usize]);
+        let last_port = range
+            .ports
+            .get(port_indexes[(range.get_port_count() - 1) as usize]);
         'outer: for port in port_indexes.iter().map(|i| range.ports.get(*i)) {
             for h in &hosts {
                 let handle = self.sem.wait().await;
@@ -426,7 +429,7 @@ impl Scanner {
                     if let Err(e) = ret {
                         if !e.is_fatal() {
                             let mut host_w = h_handle.write().await;
-                            trace!("Marking host {} down", host_w.addr );
+                            trace!("Marking host {} down", host_w.addr);
                             if host_w.up {
                                 // indicate that scanning for this host has stopped
                                 if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
@@ -456,15 +459,14 @@ impl Scanner {
         let r = rv.lock().await.take();
         match r {
             Some(e) => Err(e),
-            None => Ok(())
-
+            None => Ok(()),
         }
     }
 }
 
-struct Host{
+struct Host {
     addr: IpAddr,
-    up: bool
+    up: bool,
 }
 // do a scan for single port on host
 // Returns Ok if scanning succeeded, Err if there was error preventing the
@@ -506,7 +508,7 @@ mod tests {
             try_count: 2,
             read_banner_size: None,
             read_banner_timeout: None,
-            randomize: false
+            randomize: false,
         };
 
         let mut map = HashMap::new();
