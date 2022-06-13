@@ -18,6 +18,7 @@ pub const ARG_READ_BANNER_SIZE: &str = "read-banner-size";
 pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
 pub const ARG_READ_BANNER: &str = "read-banner";
 pub const ARG_VERBOSE: &str = "verbose";
+pub const ARG_RANDOMIZE: &str = "randomize";
 
 /// Current version
 pub const PSCAN_VERSION: &str = "0.2.0-dev";
@@ -128,7 +129,12 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             .default_value("256")
             .required(false)
             .help("Maximum number of bytes to read when reading banner from open port")
-        )
+        ).arg(clap::Arg::new(ARG_RANDOMIZE)
+            .long(ARG_RANDOMIZE)
+            .takes_value(false)
+            .required(false)
+            .help("Randomize the order in which the hosts and ports are scanned")
+    )
 }
 
 /// Error returned when parsing command line or configuration values
@@ -344,6 +350,13 @@ where
     deserialize_type(des, ARG_READ_BANNER_SIZE)
 }
 
+fn deserialize_randomize<'de, D>(des: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_VERBOSE)
+}
+
 /// Configuration parameters parsed from command line or JSON file
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -395,6 +408,8 @@ pub struct Config {
     read_banner_timeout: Option<Duration>,
     #[serde(default, deserialize_with = "deserialize_verbose")]
     verbose: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_randomize")]
+    randomize: Option<bool>,
 }
 
 /// helper for parsing a value from command line parameter
@@ -445,6 +460,7 @@ impl TryFrom<clap::ArgMatches> for Config {
         })?;
         let read_banner = Some(value.is_present(ARG_READ_BANNER));
         let verbose = Some(value.is_present(ARG_VERBOSE));
+        let randomize = Some(value.is_present(ARG_RANDOMIZE));
 
         Ok(Config {
             target,
@@ -459,6 +475,7 @@ impl TryFrom<clap::ArgMatches> for Config {
             read_banner_size,
             read_banner_timeout,
             verbose,
+            randomize,
         })
     }
 }
@@ -504,6 +521,7 @@ impl Config {
             try_count: self.try_count.unwrap(),
             read_banner_size,
             read_banner_timeout,
+            randomize: self.randomize.unwrap_or(false),
         }
     }
 
@@ -585,6 +603,13 @@ impl Config {
                 self.verbose.or(Some(false))
             }
         };
+        let randomize = {
+            if matches.is_present(ARG_RANDOMIZE){
+                Some(true)
+            } else{
+                self.randomize.or(Some(false))
+            }
+        };
 
         Ok(Config {
             target,
@@ -599,6 +624,7 @@ impl Config {
             read_banner_size,
             read_banner_timeout,
             verbose,
+            randomize,
         })
     }
 
@@ -863,6 +889,7 @@ mod tests {
                 read_banner_size: Some(128),
                 read_banner_timeout: Some(Duration::from_millis(100)),
                 verbose: Some(false),
+                randomize: Some(false),
             };
 
             let m = build_commandline_args()
@@ -998,6 +1025,7 @@ mod tests {
             read_banner_size: None,
             read_banner_timeout: None,
             verbose: None,
+            randomize: None,
         };
 
         let empty_cmdline: Vec<&str> = Vec::new();
@@ -1018,6 +1046,7 @@ mod tests {
         assert!(new_cfg.read_banner_size.is_some());
         assert!(new_cfg.read_banner_timeout.is_some());
         assert!(new_cfg.verbose.is_some());
+        assert!(new_cfg.randomize.is_some());
 
         // no values should be set for fields we have no proper defaults for
         assert!(new_cfg.target.is_empty());

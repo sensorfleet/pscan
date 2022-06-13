@@ -18,4 +18,5 @@ signal-hook-async-std = { version="0.2"}
 signal-hook = {version="0.3"}
 futures = {version="0.3"}
 base64 = {version="0.13"}
+rand = {version="0.8"}
 
