@@ -427,6 +427,7 @@ impl Scanner {
             let semh = self.sem.wait().await;
             if !ctx.keep_running() {
                 // host down, no need to continue further
+                semh.signal();
                 break;
             }
             let handle = task::spawn(scan_port_stripe(
