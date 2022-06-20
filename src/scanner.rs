@@ -308,6 +308,7 @@ impl ScanType {
 pub struct ScanParameters {
     pub wait_timeout: Duration,          // Duration to wait for responses
     pub concurrent_scans: usize,         // number of concurrent tasks to run
+    pub concurrent_hosts: usize,         // number of hosts to scan at the same time
     pub enable_adaptive_timing: bool,    // should adaptive timeout be used
     pub retry_on_error: bool,            // should we retry on network error
     pub try_count: usize,                // number of times to try if there is no response
@@ -321,6 +322,7 @@ impl Default for ScanParameters {
         ScanParameters {
             wait_timeout: DEFAULT_CONNECTION_TIMEOUT,
             concurrent_scans: 100,
+            concurrent_hosts: 100,
             enable_adaptive_timing: false,
             retry_on_error: false,
             try_count: 2,
@@ -398,60 +400,62 @@ impl Scanner {
         let last_port = range
             .ports
             .get(port_indexes[(range.get_port_count() - 1) as usize]);
-        'outer: for port in port_indexes.iter().map(|i| range.ports.get(*i)) {
-            for h in &hosts {
-                let handle = self.sem.wait().await;
-                if self.stop.load(Ordering::SeqCst) {
-                    warn!("Stopping scanning due to signal");
-                    handle.signal();
-                    break 'outer;
-                }
-                let host = h.read().await;
-                if !host.up {
-                    trace!("Host {} not up, discarding", host.addr);
-                    handle.signal();
-                    continue;
-                }
+        'outer: for h_chunk in hosts.chunks(self.params.concurrent_hosts) {
+            for port in port_indexes.iter().map(|i| range.ports.get(*i)) {
+                for h in h_chunk {
+                    let handle = self.sem.wait().await;
+                    if self.stop.load(Ordering::SeqCst) {
+                        warn!("Stopping scanning due to signal");
+                        handle.signal();
+                        break 'outer;
+                    }
+                    let host = h.read().await;
+                    if !host.up {
+                        trace!("Host {} not up, discarding", host.addr);
+                        handle.signal();
+                        continue;
+                    }
 
-                let sa = SocketAddr::new(host.addr, port);
-                drop(host);
+                    let sa = SocketAddr::new(host.addr, port);
+                    drop(host);
 
-                let tx = Arc::clone(&atx);
-                let typ = ScanType::clone(&self.r#type);
-                let h_handle = Arc::clone(h);
-                let s = Arc::clone(&self.stop);
-                let is_last = port == last_port;
-                let r = Arc::clone(&rv);
+                    let tx = Arc::clone(&atx);
+                    let typ = ScanType::clone(&self.r#type);
+                    let h_handle = Arc::clone(h);
+                    let s = Arc::clone(&self.stop);
+                    let is_last = port == last_port;
+                    let r = Arc::clone(&rv);
 
-                task::spawn(async move {
-                    let ret = scan_single(typ, self.params, Arc::clone(&tx), sa).await;
-                    handle.signal();
-                    if let Err(e) = ret {
-                        if !e.is_fatal() {
-                            let mut host_w = h_handle.write().await;
-                            trace!("Marking host {} down", host_w.addr);
-                            if host_w.up {
-                                // indicate that scanning for this host has stopped
+                    task::spawn(async move {
+                        let ret = scan_single(typ, &self.params, Arc::clone(&tx), sa).await;
+                        handle.signal();
+                        if let Err(e) = ret {
+                            if !e.is_fatal() {
+                                let mut host_w = h_handle.write().await;
+                                trace!("Marking host {} down", host_w.addr);
+                                if host_w.up {
+                                    // indicate that scanning for this host has stopped
+                                    if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                                        warn!("Unable to send host scanned indication: {}", e);
+                                    }
+                                }
+                                host_w.up = false;
+                            } else {
+                                info!("stopping due to fatal error while scanning");
                                 if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
                                     warn!("Unable to send host scanned indication: {}", e);
                                 }
+                                let mut ret = r.lock().await;
+                                *ret = Some(e);
+                                s.store(true, Ordering::SeqCst);
                             }
-                            host_w.up = false;
-                        } else {
-                            info!("stopping due to fatal error while scanning");
+                        } else if is_last {
                             if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
                                 warn!("Unable to send host scanned indication: {}", e);
                             }
-                            let mut ret = r.lock().await;
-                            *ret = Some(e);
-                            s.store(true, Ordering::SeqCst);
                         }
-                    } else if is_last {
-                        if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
-                            warn!("Unable to send host scanned indication: {}", e);
-                        }
-                    }
-                });
+                    });
+                }
             }
         }
         debug!("waiting for all tasks to complete");
@@ -473,7 +477,7 @@ struct Host {
 // scan to succeed (host was down, could not be reached, etc).
 async fn scan_single(
     typ: ScanType,
-    params: ScanParameters,
+    params: &ScanParameters,
     tx: Arc<Sender<ScanInfo>>,
     sa: SocketAddr,
 ) -> Result<(), ScanError> {
@@ -503,6 +507,7 @@ mod tests {
         let params = ScanParameters {
             wait_timeout: Duration::from_millis(100),
             concurrent_scans: 2,
+            concurrent_hosts: 2,
             enable_adaptive_timing: false,
             retry_on_error: false,
             try_count: 2,

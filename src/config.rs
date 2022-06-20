@@ -19,6 +19,7 @@ pub const ARG_READ_BANNER_TIMEOUT: &str = "read-banner-timeout";
 pub const ARG_READ_BANNER: &str = "read-banner";
 pub const ARG_VERBOSE: &str = "verbose";
 pub const ARG_RANDOMIZE: &str = "randomize";
+pub const ARG_CONCURRENT_HOSTS: &str = "concurrent-hosts";
 
 /// Current version
 pub const PSCAN_VERSION: &str = "0.2.0-dev";
@@ -61,14 +62,17 @@ pub fn build_commandline_args() -> clap::Command<'static> {
                 .help("Number of concurrent scans to run")
                 .default_value("100"),
         )
-        // .arg(
-        //     clap::Arg::with_name("adaptive-timing")
-        //         .long("enable-adaptive-timing")
-        //         .short("A")
-        //         .takes_value(false)
-        //         .required(false)
-        //         .help("Enable adaptive timing (adapt timeout based on detected connection delay)"),
-        // )
+        .arg(
+            clap::Arg::new(ARG_CONCURRENT_HOSTS)
+                .long(ARG_CONCURRENT_HOSTS)
+                .short('H')
+                .takes_value(true)
+                .required(false)
+                .help("Number of hosts to scan concurrently. Can be used to limit the number of hosts \
+                   to scan at the same time, if number of concurrent threads is large. \
+                   If no value is set, number of concurrent scans is used"
+                )
+        )
         .arg(
             clap::Arg::new(ARG_TIMEOUT)
                 .long(ARG_TIMEOUT)
@@ -337,6 +341,14 @@ where
 {
     deserialize_type(des, ARG_CONCURRENT_SCANS)
 }
+
+fn deserialize_concurrent_hosts<'de, D>(des: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_type(des, ARG_CONCURRENT_HOSTS)
+}
+
 fn deserialize_try_count<'de, D>(des: D) -> Result<Option<usize>, D::Error>
 where
     D: Deserializer<'de>,
@@ -373,6 +385,12 @@ pub struct Config {
         deserialize_with = "deserialize_concurrent_scans"
     )]
     concurrent_scans: Option<usize>,
+    #[serde(
+        default,
+        rename(deserialize = "concurrent-hosts"),
+        deserialize_with = "deserialize_concurrent_hosts"
+    )]
+    concurrent_hosts: Option<usize>,
     #[serde(default, deserialize_with = "deserialize_timeout")]
     timeout: Option<Duration>,
     json: Option<String>,
@@ -445,6 +463,10 @@ impl TryFrom<clap::ArgMatches> for Config {
         let concurrent_scans = parse_from_string(&value, ARG_CONCURRENT_SCANS, |s| {
             s.parse().map_err(Error::from)
         })?;
+        let concurrent_hosts: Option<usize> =
+            parse_from_string(&value, ARG_CONCURRENT_HOSTS, |s| {
+                s.parse().map_err(Error::from)
+            })?;
         let timeout = parse_from_string(&value, ARG_TIMEOUT, |s| {
             Ok(Duration::from_millis(s.parse()?))
         })?;
@@ -467,6 +489,7 @@ impl TryFrom<clap::ArgMatches> for Config {
             exclude,
             ports,
             concurrent_scans,
+            concurrent_hosts,
             timeout,
             json,
             retry_on_error,
@@ -515,6 +538,9 @@ impl Config {
 
         scanner::ScanParameters {
             concurrent_scans: self.concurrent_scans.unwrap(),
+            concurrent_hosts: self
+                .concurrent_hosts
+                .unwrap_or_else(|| self.concurrent_scans.unwrap()),
             wait_timeout: self.timeout.unwrap(),
             enable_adaptive_timing: false,
             retry_on_error: self.retry_on_error.unwrap(),
@@ -563,6 +589,10 @@ impl Config {
         })?;
         let concurrent_scans =
             get_or_override(self.concurrent_scans, matches, ARG_CONCURRENT_SCANS, |s| {
+                s.parse().map_err(Error::from)
+            })?;
+        let concurrent_hosts =
+            get_or_override(self.concurrent_hosts, matches, ARG_CONCURRENT_HOSTS, |s| {
                 s.parse().map_err(Error::from)
             })?;
         let timeout = get_or_override(self.timeout, matches, ARG_TIMEOUT, |s| {
@@ -616,6 +646,7 @@ impl Config {
             exclude,
             ports,
             concurrent_scans,
+            concurrent_hosts,
             timeout,
             json,
             retry_on_error,
@@ -649,6 +680,14 @@ impl Config {
             }
         } else {
             missing_fields.push(ARG_CONCURRENT_SCANS);
+        }
+        if let Some(h) = self.concurrent_hosts {
+            if h == 0 {
+                return Err(Error::Message(format!(
+                    "invalid value for {}: Value needs to be non-zero",
+                    ARG_CONCURRENT_HOSTS
+                )));
+            }
         }
         if let Some(c) = self.try_count {
             if c == 0 {
@@ -871,6 +910,11 @@ mod tests {
                 arg: &["--verbose"],
                 check: Box::new(|c| c.verbose.unwrap()),
             },
+            OverwriteTest {
+                name: "concurrent-hosts",
+                arg: &["--concurrent-hosts", "1"],
+                check: Box::new(|c| c.concurrent_hosts.unwrap() == 1),
+            },
         ];
 
         for t in tests {
@@ -881,6 +925,7 @@ mod tests {
                 ports: Some(ports::PortRange::try_from("1-10").unwrap()),
                 exclude: parse_single_addresses("192.168.1.2").unwrap(),
                 concurrent_scans: Some(1),
+                concurrent_hosts: None,
                 timeout: Some(Duration::from_millis(100)),
                 json: Some("config.json".to_owned()),
                 retry_on_error: Some(false),
@@ -915,7 +960,8 @@ mod tests {
             "read-banner": true,
             "read-banner-size": 512,
             "read-banner-timeout": 1200,
-            "verbose": true
+            "verbose": true,
+            "concurrent-hosts": 100
         }
         "#;
 
@@ -947,6 +993,7 @@ mod tests {
             Duration::from_millis(1200)
         );
         assert!(cfg.verbose.unwrap());
+        assert_eq!(cfg.concurrent_hosts.unwrap(), 100)
     }
 
     #[test]
@@ -982,6 +1029,7 @@ mod tests {
         );
         assert_eq!(params.try_count, cfg.try_count.unwrap());
         assert_eq!(params.retry_on_error, cfg.retry_on_error.unwrap());
+        assert_eq!(params.concurrent_hosts, cfg.concurrent_scans.unwrap());
     }
 
     #[test]
@@ -1011,12 +1059,39 @@ mod tests {
     }
 
     #[test]
+    fn test_cfg_as_scan_params_concurrent_hosts() {
+        let raw_json = r#"
+        {
+            "target": "192.168.1.0/24",
+            "ports": "1,2",
+            "exclude": "192.168.1.1",
+            "concurrent-scans": 600,
+            "concurrent-hosts": 500,
+            "timeout": 1000,
+            "retry-on-error": true,
+            "try-count": 3,
+            "read-banner": true,
+            "read-banner-size": 512,
+            "read-banner-timeout": 1200,
+            "verbose": true
+        }
+        "#;
+
+        let cfg: Config = serde_json::from_str(raw_json).unwrap();
+
+        let params = cfg.as_params();
+        assert_eq!(params.concurrent_hosts, 500);
+        assert_eq!(params.concurrent_scans, 600);
+    }
+
+    #[test]
     fn test_config_with_defaults() {
         let cfg = Config {
             target: Default::default(),
             exclude: Default::default(),
             ports: None,
             concurrent_scans: None,
+            concurrent_hosts: None,
             timeout: None,
             json: None,
             retry_on_error: None,
@@ -1060,6 +1135,7 @@ mod tests {
         // .. and now the configuration should be ok
         assert!(new_cfg.verify().is_ok());
         assert!(new_cfg.get_range().is_some());
+        assert!(new_cfg.concurrent_hosts.is_none())
     }
 
     #[test]
