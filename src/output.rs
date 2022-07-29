@@ -3,6 +3,7 @@ use async_std::prelude::*;
 use serde::ser::SerializeMap;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::time::Duration;
@@ -41,12 +42,10 @@ impl Display for Banners {
         let mut builder = String::new();
         builder.push_str("\n\t Banners received from open ports:\n");
         for (port, b) in &self.values {
-            match std::str::from_utf8(b) {
-                Ok(s) => builder.push_str(&format!("\t\tPort: {} \"{}\"", port, s)),
-                Err(_e) => {
-                    builder.push_str(&format!("\t\tPort: {}: {} bytes of data", port, b.len()))
-                }
-            }
+            let _ = match std::str::from_utf8(b) {
+                Ok(s) => write!(builder, "\t\tPort: {} \"{}\"", port, s),
+                Err(_e) => write!(builder, "\t\tPort: {}: {} bytes of data", port, b.len()),
+            };
         }
         write!(f, "{}", builder)
     }
@@ -161,25 +160,28 @@ impl fmt::Display for HostInfo {
                 "Up"
             }
         };
-        pstr.push_str(&format!(
+        let _ = write!(
+            pstr,
             "{} is {} \n\t{} Open Ports:",
             self.address,
             status,
             self.open_ports.len()
-        ));
+        );
         for port in &self.open_ports {
-            pstr.push_str(&format!(" {}", port))
+            let _ = write!(pstr, " {}", port);
         }
-        pstr.push_str(&format!(
+        let _ = write!(
+            pstr,
             "\n\t{} ports closed and {} filtered",
             self.closed_count, self.filtered_count
-        ));
+        );
         let delays = self.get_delays();
-        pstr.push_str(&format!(
+        let _ = write!(
+            pstr,
             " (delays: min {}ms, max {}ms)",
             delays.0.as_millis(),
             delays.1.as_millis()
-        ));
+        );
 
         if !self.banners.is_empty() {
             pstr.push_str(&self.banners.to_string());
