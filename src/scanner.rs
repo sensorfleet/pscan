@@ -2,16 +2,17 @@ use async_std::channel::Sender;
 use async_std::future;
 use async_std::io::{ErrorKind, ReadExt};
 use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
-use async_std::sync::{Arc, Mutex, RwLock};
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::Future;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
+
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
-use crate::range::ScanRange;
+use crate::range::{ChunkIter, ScanRange};
 use crate::tools::Semaphore;
 
 // OS -specific error codes for error conditions
@@ -151,6 +152,7 @@ where
             match e.kind() {
                 ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
+                ErrorKind::PermissionDenied => Ok(PortState::HostDown()),
                 _ => handle_other_error(e, c_time),
             }
         }
@@ -379,17 +381,12 @@ impl Scanner {
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
-        let mut hosts = range
-            .hosts()
-            .map(|a| Arc::new(RwLock::new(Host { addr: a, up: true })))
-            .collect::<Vec<Arc<RwLock<Host>>>>();
-        let mut port_indexes = (0..range.get_port_count() as usize).collect::<Vec<usize>>();
+        let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
+        let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
 
         if self.params.randomize {
             let mut rng = rand::thread_rng();
-            debug!("Randomizing port and host order");
-            hosts.shuffle(&mut rng);
-            port_indexes.shuffle(&mut rng);
+            ports.shuffle(&mut rng);
         }
 
         // return value, this gets set from task if fatal error occurs and w
@@ -397,49 +394,41 @@ impl Scanner {
         // this might be accessed from scanning task.
         let rv = Arc::new(Mutex::new(None));
 
-        let last_port = range
-            .ports
-            .get(port_indexes[(range.get_port_count() - 1) as usize]);
-        'outer: for h_chunk in hosts.chunks(self.params.concurrent_hosts) {
-            for port in port_indexes.iter().map(|i| range.ports.get(*i)) {
-                for h in h_chunk {
+        let last_port = ports.last().unwrap().to_owned();
+
+        'outer: for host_set in host_chunks.map(|c| Arc::new(Mutex::new(c))) {
+            for port in &ports {
+                for sa in host_set
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|h| SocketAddr::new(*h, *port))
+                {
                     let handle = self.sem.wait().await;
                     if self.stop.load(Ordering::SeqCst) {
                         warn!("Stopping scanning due to signal");
                         handle.signal();
                         break 'outer;
                     }
-                    let host = h.read().await;
-                    if !host.up {
-                        trace!("Host {} not up, discarding", host.addr);
-                        handle.signal();
-                        continue;
-                    }
-
-                    let sa = SocketAddr::new(host.addr, port);
-                    drop(host);
 
                     let tx = Arc::clone(&atx);
                     let typ = ScanType::clone(&self.r#type);
-                    let h_handle = Arc::clone(h);
                     let s = Arc::clone(&self.stop);
-                    let is_last = port == last_port;
+                    let is_last = *port == last_port;
                     let r = Arc::clone(&rv);
+                    let d_map = host_set.clone();
 
                     task::spawn(async move {
-                        let ret = scan_single(typ, &self.params, Arc::clone(&tx), sa).await;
+                        let ret = scan_single(&typ, &self.params, tx.clone(), sa).await;
                         handle.signal();
                         if let Err(e) = ret {
                             if !e.is_fatal() {
-                                let mut host_w = h_handle.write().await;
-                                trace!("Marking host {} down", host_w.addr);
-                                if host_w.up {
-                                    // indicate that scanning for this host has stopped
+                                trace!("Marking host {} down", sa.ip());
+                                if d_map.lock().await.remove(&sa.ip()) {
                                     if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
                                         warn!("Unable to send host scanned indication: {}", e);
                                     }
                                 }
-                                host_w.up = false;
                             } else {
                                 info!("stopping due to fatal error while scanning");
                                 if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
@@ -468,15 +457,11 @@ impl Scanner {
     }
 }
 
-struct Host {
-    addr: IpAddr,
-    up: bool,
-}
 // do a scan for single port on host
 // Returns Ok if scanning succeeded, Err if there was error preventing the
 // scan to succeed (host was down, could not be reached, etc).
 async fn scan_single(
-    typ: ScanType,
+    typ: &ScanType,
     params: &ScanParameters,
     tx: Arc<Sender<ScanInfo>>,
     sa: SocketAddr,
