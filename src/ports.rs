@@ -137,6 +137,10 @@ impl PortRange {
         }
         panic!("requested index out of bounds")
     }
+
+    pub fn port_iter(&self) -> impl Iterator<Item = u16> + '_ {
+        (0..self.port_count() as usize).map(|i| self.get(i))
+    }
 }
 
 /// Parse a single port range, min-max (inclusive).

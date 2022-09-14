@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{collections::HashSet, hash::Hash, net::IpAddr};
 
 use cidr::{Cidr, IpCidr};
 
@@ -40,6 +40,51 @@ impl ScanRange<'_> {
             .iter()
             .flat_map(|cidr| cidr.iter())
             .filter(move |a| !self.excludes.contains(a));
+    }
+}
+
+// ChunkIter can be used to provide chunks from given iterator
+// Each call to `chunk` produces a `HasSet` containing at most `chunk_size`
+// elements from `iter`.
+pub struct ChunkIter<T: Iterator> {
+    iter: T,
+    chunk_size: usize,
+}
+
+impl<T> ChunkIter<T>
+where
+    T: Iterator,
+    T::Item: Eq + Hash,
+{
+    pub fn new(iter: T, chunk_size: usize) -> Self {
+        ChunkIter { iter, chunk_size }
+    }
+
+    pub fn chunk(&mut self) -> Option<HashSet<T::Item>> {
+        let mut ret = HashSet::with_capacity(self.chunk_size);
+        for _i in 0..self.chunk_size {
+            match self.iter.next() {
+                Some(val) => ret.insert(val),
+                None => break,
+            };
+        }
+        if ret.is_empty() {
+            None
+        } else {
+            Some(ret)
+        }
+    }
+}
+
+impl<T> Iterator for ChunkIter<T>
+where
+    T: Iterator,
+    T::Item: Eq + Hash,
+{
+    type Item = HashSet<T::Item>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.chunk()
     }
 }
 
