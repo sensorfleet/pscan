@@ -311,7 +311,6 @@ pub struct ScanParameters {
     pub wait_timeout: Duration,          // Duration to wait for responses
     pub concurrent_scans: usize,         // number of concurrent tasks to run
     pub concurrent_hosts: usize,         // number of hosts to scan at the same time
-    pub enable_adaptive_timing: bool,    // should adaptive timeout be used
     pub retry_on_error: bool,            // should we retry on network error
     pub try_count: usize,                // number of times to try if there is no response
     pub read_banner_size: Option<usize>, // number of bytes to read if connection is established
@@ -324,7 +323,6 @@ impl Default for ScanParameters {
             wait_timeout: DEFAULT_CONNECTION_TIMEOUT,
             concurrent_scans: 100,
             concurrent_hosts: 100,
-            enable_adaptive_timing: false,
             retry_on_error: false,
             try_count: 2,
             read_banner_size: None,
@@ -488,7 +486,6 @@ mod tests {
             wait_timeout: Duration::from_millis(100),
             concurrent_scans: 2,
             concurrent_hosts: 2,
-            enable_adaptive_timing: false,
             retry_on_error: false,
             try_count: 2,
             read_banner_size: None,
