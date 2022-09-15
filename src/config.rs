@@ -525,7 +525,6 @@ impl Config {
                 .concurrent_hosts
                 .unwrap_or_else(|| self.concurrent_scans.unwrap()),
             wait_timeout: self.timeout.unwrap(),
-            enable_adaptive_timing: false,
             retry_on_error: self.retry_on_error.unwrap(),
             try_count: self.try_count.unwrap(),
             read_banner_size,
