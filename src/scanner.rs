@@ -316,7 +316,6 @@ pub struct ScanParameters {
     pub try_count: usize,                // number of times to try if there is no response
     pub read_banner_size: Option<usize>, // number of bytes to read if connection is established
     pub read_banner_timeout: Option<Duration>, // how long to wait for banner
-    pub randomize: bool,
 }
 
 impl Default for ScanParameters {
@@ -330,7 +329,6 @@ impl Default for ScanParameters {
             try_count: 2,
             read_banner_size: None,
             read_banner_timeout: None,
-            randomize: false,
         }
     }
 }
@@ -383,11 +381,8 @@ impl Scanner {
         let atx = Arc::new(tx);
         let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
         let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
-
-        if self.params.randomize {
-            let mut rng = rand::thread_rng();
-            ports.shuffle(&mut rng);
-        }
+        let mut rng = rand::thread_rng();
+        ports.shuffle(&mut rng);
 
         // return value, this gets set from task if fatal error occurs and w
         // need to indicate the error. Needs to be protected by mutex since
@@ -498,7 +493,6 @@ mod tests {
             try_count: 2,
             read_banner_size: None,
             read_banner_timeout: None,
-            randomize: false,
         };
 
         let mut map = HashMap::new();
