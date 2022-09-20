@@ -147,4 +147,27 @@ mod tests {
             assert!(!hosts.contains(&e))
         }
     }
+
+    #[test]
+    fn test_chunks() {
+        let mut chunks = ChunkIter::new(0..5, 2);
+
+        let ch1 = chunks.chunk().unwrap();
+        assert!(ch1.len() == 2 && ch1.contains(&0) && ch1.contains(&1));
+        let ch2 = chunks.chunk().unwrap();
+        assert!(ch2.len() == 2 && ch2.contains(&2) && ch2.contains(&3));
+        let ch3 = chunks.chunk().unwrap();
+        assert!(ch3.len() == 1 && ch3.contains(&4));
+        assert!(chunks.chunk().is_none());
+    }
+
+    #[test]
+    fn test_chunk_iter() {
+        let chunks = ChunkIter::new(0..5, 2);
+        let values = chunks.flatten().collect::<Vec<i32>>();
+        assert!(values.len() == 5);
+        for i in 0..5 {
+            assert!(values.contains(&i))
+        }
+    }
 }
