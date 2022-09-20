@@ -1,3 +1,9 @@
+v0.2.0 (2022-09-20)
+    * Spread scanning to multiple hosts instead of trying to scan all ports
+      on single hosts. Number of hosts to scan at the same time can be
+      controlled with --concurrent-hosts parameter.
+    * Randomize the order of ports (and hosts) when scanning.
+    * Remove duplicates from port ranges.
 v0.1.0 (2021-10-27)
 
  * Initial release
