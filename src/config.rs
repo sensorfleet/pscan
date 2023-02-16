@@ -1078,7 +1078,7 @@ mod tests {
 
         let m = build_commandline_args()
             .no_binary_name(true)
-            .get_matches_from(&empty_cmdline);
+            .get_matches_from(empty_cmdline);
 
         let mut new_cfg = cfg.override_with(&m).unwrap();
         // when no command line options are given and configuration is empty

@@ -1,5 +1,3 @@
-use async_std::fs::File;
-use async_std::prelude::*;
 use serde::ser::SerializeMap;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -7,6 +5,7 @@ use std::fmt::Write as _;
 use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 /// Message field value for scan complete
 const JSON_MESSAGE_SCAN_COMPLETE: &str = "scan_complete";
@@ -207,7 +206,7 @@ pub async fn write_json_into(
     number_of_hosts: usize,
     number_of_ports: usize,
     info: Vec<&HostInfo>,
-) -> Result<(), async_std::io::Error> {
+) -> Result<(), tokio::io::Error> {
     let complete = ScanComplete {
         number_of_hosts,
         number_of_ports,
@@ -218,12 +217,13 @@ pub async fn write_json_into(
     let mut output_data = serde_json::to_string(&complete)?;
     output_data.push('\n');
     if fname.trim() == "-" {
-        async_std::io::stdout()
+        tokio::io::stdout()
             .write_all(output_data.as_bytes())
             .await?;
     } else {
-        let mut f = File::create(fname).await?;
+        let mut f = tokio::fs::File::create(fname).await?;
         f.write_all(output_data.as_bytes()).await?;
+        f.flush().await?;
     }
 
     Ok(())
@@ -236,7 +236,7 @@ pub fn write_results_to_stdout(
     number_of_hosts: usize,
     number_of_ports: usize,
     infos: &[HostInfo],
-) -> Result<(), async_std::io::Error> {
+) -> Result<(), tokio::io::Error> {
     print!("Scan complete:\n ");
     let mut number_of_down_hosts = 0;
     let mut number_of_silent_hosts = 0;
