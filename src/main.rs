@@ -1,14 +1,13 @@
 #[macro_use]
 extern crate log;
 
-use async_std::channel::Receiver;
-use async_std::net::IpAddr;
-use async_std::prelude::*;
-use async_std::task::Builder;
 use signal_hook::consts::{SIGINT, SIGTERM};
-use signal_hook_async_std::Signals;
+use signal_hook_tokio::Signals;
+use std::net::IpAddr;
 use std::sync::{atomic::AtomicBool, Arc};
+use tokio::sync::mpsc::UnboundedReceiver;
 
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -17,14 +16,16 @@ mod output;
 mod ports;
 mod range;
 mod scanner;
-mod tools;
 
 /// This function is run on its own task to collect the scan results.
 /// Returns once the `Receiver` closes and returs the collected `HostInfo`.
-async fn collect_results(rx: Receiver<scanner::ScanInfo>, verbose: bool) -> Vec<output::HostInfo> {
+async fn collect_results(
+    mut rx: UnboundedReceiver<scanner::ScanInfo>,
+    verbose: bool,
+) -> Vec<output::HostInfo> {
     let mut host_infos: HashMap<IpAddr, output::HostInfo> = HashMap::new();
 
-    while let Ok(res) = rx.recv().await {
+    while let Some(res) = rx.recv().await {
         match res {
             scanner::ScanInfo::PortStatus(status) => {
                 let info = host_infos
@@ -67,7 +68,7 @@ async fn output_results(
     infos: &[output::HostInfo],
     number_of_ports: usize,
     output_file: Option<&str>,
-) -> Result<(), async_std::io::Error> {
+) -> Result<(), tokio::io::Error> {
     let number_of_hosts = infos.len();
     if let Some(fname) = output_file {
         let opens: Vec<&output::HostInfo> = infos
@@ -106,7 +107,7 @@ async fn sighandler(signals: Signals, flag: Arc<AtomicBool>) {
     }
 }
 
-#[async_std::main]
+#[tokio::main]
 async fn main() {
     env_logger::init();
 
@@ -157,47 +158,50 @@ async fn main() {
         info!("Retry on error set")
     }
 
-    let (tx, rx) = async_std::channel::bounded(10);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let signals = match Signals::new(&[SIGINT, SIGTERM]) {
+    let signals = match Signals::new([SIGINT, SIGTERM]) {
         Ok(h) => h,
         Err(e) => exit_error(Some(format!("Unable to register signal handler: {}", e))),
     };
     let stop = Arc::new(AtomicBool::new(false));
     let handle = signals.handle();
 
-    let sig_h = async_std::task::spawn(sighandler(signals, Arc::clone(&stop)));
+    let sig_h = tokio::task::spawn(sighandler(signals, Arc::clone(&stop)));
 
     let range = cfg.get_range().unwrap();
     let number_of_ports = range.get_port_count() as usize;
 
-    if let Ok(col) = Builder::new()
-        .name("collector".to_owned())
-        .spawn(collect_results(rx, verbose))
-    {
-        let scan = scanner::Scanner::create(params, stop.clone());
-        let (infos, scanstatus) = col.join(scan.scan(range, tx)).await;
-        if let Err(e) = scanstatus {
-            if e.is_fatal() {
-                // fatal error, results can not be trusted.
-                exit_error(Some(e.to_string()));
-            } else {
-                error!("Error while scanning: {}", e);
+    let col = tokio::task::spawn(collect_results(rx, verbose));
+    let scan = scanner::Scanner::create(params, stop.clone());
+    let (col_result, scanstatus) = tokio::join!(col, scan.scan(range, tx));
+    if let Err(e) = scanstatus {
+        if e.is_fatal() {
+            // fatal error, results can not be trusted.
+            exit_error(Some(e.to_string()));
+        } else {
+            error!("Error while scanning: {}", e);
+        }
+    }
+    match col_result {
+        Ok(infos) => {
+            // print results now that scan is complete
+            if let Err(er) = output_results(&infos, number_of_ports, cfg.json()).await {
+                error!("Unable to output results: {}", er);
             }
         }
-        // print results now that scan is complete
-        if let Err(er) = output_results(&infos, number_of_ports, cfg.json()).await {
-            error!("Unable to output results: {}", er);
+        Err(error) => {
+            exit_error(Some(error.to_string()));
         }
-    } else {
-        error!("Could not spawn scanner")
-    }
+    };
     handle.close();
     debug!(
         "Waiting for sighandler task, stop is {}",
         stop.load(std::sync::atomic::Ordering::SeqCst)
     );
-    sig_h.await;
+    if let Err(e) = sig_h.await {
+        warn!("signal handler error: {}", e);
+    }
     if stop.load(std::sync::atomic::Ordering::SeqCst) {
         std::process::exit(2);
     }

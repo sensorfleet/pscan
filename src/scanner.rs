@@ -1,19 +1,19 @@
-use async_std::channel::Sender;
-use async_std::future;
-use async_std::io::{ErrorKind, ReadExt};
-use async_std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
 use futures::Future;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
+use std::io::ErrorKind;
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Semaphore;
 
+use std::net::{IpAddr, Shutdown, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use std::{fmt, sync::atomic::AtomicBool};
 
 use crate::range::{ChunkIter, ScanRange};
-use crate::tools::Semaphore;
 
 // OS -specific error codes for error conditions
 #[cfg(target_os = "macos")]
@@ -125,9 +125,9 @@ where
     F: FnOnce(TcpStream, C) -> Fut,
     Fut: Future<Output = Option<Vec<u8>>>,
 {
-    trace!("Trying {}", sa);
+    trace!("Trying {:}", sa);
     let start = Instant::now();
-    let res = future::timeout(conn_timeout, TcpStream::connect(sa)).await;
+    let res = tokio::time::timeout(conn_timeout, TcpStream::connect(sa)).await;
     let c_time = start.elapsed();
 
     let c = match res {
@@ -173,9 +173,9 @@ pub enum ScanType {
 
 /// Close given TcpStream.
 /// Always returns None
-async fn close_connection(s: TcpStream, how: Shutdown) -> Option<Vec<u8>> {
-    if let Err(e) = s.shutdown(how) {
-        warn!("Unable to shutdown connection: {}", e)
+async fn close_connection(mut s: TcpStream, _how: Shutdown) -> Option<Vec<u8>> {
+    if let Err(error) = s.shutdown().await {
+        warn!("Can not shut down connection: {}", error);
     }
     None
 }
@@ -196,7 +196,7 @@ async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
         p.timeout.as_millis()
     );
 
-    let ret = future::timeout(p.timeout, s.read(&mut buf)).await;
+    let ret = tokio::time::timeout(p.timeout, s.read(&mut buf)).await;
     info!("Read returned {:?}", ret);
     let r = match ret {
         Ok(Ok(0)) => None,
@@ -227,7 +227,7 @@ impl ScanType {
     async fn cycle(
         &self,
         sa: SocketAddr,
-        tx: Arc<Sender<ScanInfo>>,
+        tx: Arc<UnboundedSender<ScanInfo>>,
         conn_timeout: Duration,
         retry_on_error: bool,
         try_count: usize,
@@ -247,7 +247,7 @@ impl ScanType {
                     try_port(sa, conn_timeout, read_banner, p).await?
                 }
                 ScanType::Test(m) => {
-                    let mut val = m.lock().await;
+                    let mut val = m.lock().unwrap();
                     val.remove(&sa).unwrap_or(Ok(PortState::HostDown()))?
                 }
             };
@@ -286,19 +286,16 @@ impl ScanType {
                             "waiting 500ms before next retry ({}/{} tries)",
                             nr_of_tries, try_count
                         );
-                        task::sleep(Duration::from_millis(500)).await;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
                         continue;
                     }
                 }
             };
-            if let Err(_e) = tx
-                .send(ScanInfo::PortStatus(PortResult {
-                    address: sa.ip(),
-                    port: sa.port(),
-                    state,
-                }))
-                .await
-            {
+            if let Err(_e) = tx.send(ScanInfo::PortStatus(PortResult {
+                address: sa.ip(),
+                port: sa.port(),
+                state,
+            })) {
                 warn!("Result channel closed!")
             }
             return ret;
@@ -375,7 +372,11 @@ impl Scanner {
     }
 
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
-    pub async fn scan(self, range: ScanRange<'_>, tx: Sender<ScanInfo>) -> Result<(), ScanError> {
+    pub async fn scan(
+        self,
+        range: ScanRange<'_>,
+        tx: UnboundedSender<ScanInfo>,
+    ) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
         let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
         let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
@@ -389,7 +390,7 @@ impl Scanner {
 
         let last_port = ports.last().unwrap().to_owned();
 
-        'outer: for host_set in host_chunks.map(|c| Arc::new(Mutex::new(c))) {
+        'outer: for host_set in host_chunks.map(|c| Arc::new(tokio::sync::Mutex::new(c))) {
             for port in &ports {
                 for sa in host_set
                     .lock()
@@ -397,10 +398,13 @@ impl Scanner {
                     .iter()
                     .map(|h| SocketAddr::new(*h, *port))
                 {
-                    let handle = self.sem.wait().await;
+                    let Ok(handle) = self.sem.clone().acquire_owned().await else {
+                        warn!("Semaphore closed");
+                        break 'outer;
+                    };
                     if self.stop.load(Ordering::SeqCst) {
                         warn!("Stopping scanning due to signal");
-                        handle.signal();
+                        drop(handle);
                         break 'outer;
                     }
 
@@ -411,28 +415,28 @@ impl Scanner {
                     let r = Arc::clone(&rv);
                     let d_map = host_set.clone();
 
-                    task::spawn(async move {
+                    tokio::task::spawn(async move {
                         let ret = scan_single(&typ, &self.params, tx.clone(), sa).await;
-                        handle.signal();
+                        drop(handle);
                         if let Err(e) = ret {
                             if !e.is_fatal() {
                                 trace!("Marking host {} down", sa.ip());
                                 if d_map.lock().await.remove(&sa.ip()) {
-                                    if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                                    if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
                                         warn!("Unable to send host scanned indication: {}", e);
                                     }
                                 }
                             } else {
                                 info!("stopping due to fatal error while scanning");
-                                if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                                if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
                                     warn!("Unable to send host scanned indication: {}", e);
                                 }
-                                let mut ret = r.lock().await;
+                                let mut ret = r.lock().unwrap();
                                 *ret = Some(e);
                                 s.store(true, Ordering::SeqCst);
                             }
                         } else if is_last {
-                            if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())).await {
+                            if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
                                 warn!("Unable to send host scanned indication: {}", e);
                             }
                         }
@@ -441,8 +445,11 @@ impl Scanner {
             }
         }
         debug!("waiting for all tasks to complete");
-        self.sem.wait_empty().await;
-        let r = rv.lock().await.take();
+        while self.sem.available_permits() < self.params.concurrent_scans {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        info!("Tasks completed");
+        let r = rv.lock().unwrap().take();
         match r {
             Some(e) => Err(e),
             None => Ok(()),
@@ -456,7 +463,7 @@ impl Scanner {
 async fn scan_single(
     typ: &ScanType,
     params: &ScanParameters,
-    tx: Arc<Sender<ScanInfo>>,
+    tx: Arc<UnboundedSender<ScanInfo>>,
     sa: SocketAddr,
 ) -> Result<(), ScanError> {
     match typ
@@ -480,7 +487,7 @@ mod tests {
     use crate::{config, ports};
     use std::{convert::TryFrom, str::FromStr};
 
-    #[async_std::test]
+    #[tokio::test]
     async fn test_simple() {
         let params = ScanParameters {
             wait_timeout: Duration::from_millis(100),
@@ -525,11 +532,11 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let scanner = Scanner::create_test(params, stop, map);
 
-        let (tx, rx) = async_std::channel::bounded::<ScanInfo>(10);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ScanInfo>();
 
-        let reader_task = task::spawn(async move {
+        let reader_task = tokio::task::spawn(async move {
             let mut infos: Vec<ScanInfo> = Vec::new();
-            while let Ok(data) = rx.recv().await {
+            while let Some(data) = rx.recv().await {
                 infos.push(data)
             }
             infos
@@ -538,7 +545,7 @@ mod tests {
         let scan_result = scanner.scan(range, tx).await;
         assert!(scan_result.is_ok());
 
-        let infos = reader_task.await;
+        let infos = reader_task.await.unwrap();
         let mut addr1_scanned = false;
         let mut addr2_scanned = false;
         for info in infos {
