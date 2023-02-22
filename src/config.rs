@@ -24,14 +24,13 @@ pub const ARG_CONCURRENT_HOSTS: &str = "concurrent-hosts";
 pub const PSCAN_VERSION: &str = "0.2.0";
 
 /// Build command line arguments for the program.
-pub fn build_commandline_args() -> clap::Command<'static> {
+pub fn build_commandline_args() -> clap::Command {
     clap::Command::new("TCP port scanner")
         .version(PSCAN_VERSION)
         .arg(
             clap::Arg::new(ARG_TARGET)
                 .long(ARG_TARGET)
                 .short('t')
-                .takes_value(true)
                 .required(false)
                 .help("Address(es) of the host(s) to scan, IP addresses, or CIDRs separated by comma"),
         )
@@ -39,7 +38,6 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             clap::Arg::new(ARG_EXCLUDE)
                 .long(ARG_EXCLUDE)
                 .short('e')
-                .takes_value(true)
                 .required(false)
                 .help("Comma -separated list of addresses to exclude from scanning")
         )
@@ -47,7 +45,6 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             clap::Arg::new(ARG_PORTS)
                 .long(ARG_PORTS)
                 .short('p')
-                .takes_value(true)
                 .required(false)
                 .default_value("1-100")
                 .help("Ports to scan"),
@@ -56,7 +53,6 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             clap::Arg::new(ARG_CONCURRENT_SCANS)
                 .long(ARG_CONCURRENT_SCANS)
                 .short('b')
-                .takes_value(true)
                 .required(false)
                 .help("Number of concurrent scans to run")
                 .default_value("100"),
@@ -65,7 +61,6 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             clap::Arg::new(ARG_CONCURRENT_HOSTS)
                 .long(ARG_CONCURRENT_HOSTS)
                 .short('H')
-                .takes_value(true)
                 .required(false)
                 .help("Number of hosts to scan concurrently. Can be used to limit the number of hosts \
                    to scan at the same time, if number of concurrent threads is large. \
@@ -76,7 +71,6 @@ pub fn build_commandline_args() -> clap::Command<'static> {
             clap::Arg::new(ARG_TIMEOUT)
                 .long(ARG_TIMEOUT)
                 .short('T')
-                .takes_value(true)
                 .default_value("1000")
                 .required(false)
                 .help("Timeout in ms to wait for response before determening port as closed/firewalled")
@@ -84,51 +78,46 @@ pub fn build_commandline_args() -> clap::Command<'static> {
         .arg(clap::Arg::new(ARG_JSON)
             .long(ARG_JSON)
             .short('j')
-            .takes_value(true)
             .required(false)
             .help("Write output as JSON into given file, - to write to stdout")
         )
         .arg(clap::Arg::new(ARG_CONFIG_FILE)
             .long(ARG_CONFIG_FILE)
             .short('C')
-            .takes_value(true)
             .required(false)
             .help("Read configuration from given JSON file")
         )
         .arg(clap::Arg::new(ARG_RETRY_ON_ERROR)
             .long(ARG_RETRY_ON_ERROR)
             .short('R')
-            .takes_value(false)
             .required(false)
+            .action(clap::ArgAction::SetTrue)
             .help("Retry scan a few times on (possible transient) network error")
         ).arg(clap::Arg::new(ARG_TRY_COUNT)
             .long(ARG_TRY_COUNT)
             .short('r')
-            .takes_value(true)
             .required(false)
             .default_value("2")
             .help("Number of times to try a port which receives no response (including the initial try)")
         ).arg(clap::Arg::new(ARG_VERBOSE)
             .long(ARG_VERBOSE)
             .short('v')
-            .takes_value(false)
             .required(false)
+            .action(clap::ArgAction::SetTrue)
             .help("Verbose output")
         ).arg(clap::Arg::new(ARG_READ_BANNER)
             .long(ARG_READ_BANNER)
             .short('B')
-            .takes_value(false)
             .required(false)
+            .action(clap::ArgAction::SetTrue)
             .help("Try to read up to read-banner-size bytes (with read-banner-timeout) when connection is established")
         ).arg(clap::Arg::new(ARG_READ_BANNER_TIMEOUT)
             .long(ARG_READ_BANNER_TIMEOUT)
-            .takes_value(true)
             .default_value("1000")
             .required(false)
             .help("Timeout in ms to wait for when reading banner from open port")
         ).arg(clap::Arg::new(ARG_READ_BANNER_SIZE)
             .long(ARG_READ_BANNER_SIZE)
-            .takes_value(true)
             .default_value("256")
             .required(false)
             .help("Maximum number of bytes to read when reading banner from open port")
@@ -422,7 +411,7 @@ fn parse_from_string<F, T>(matches: &clap::ArgMatches, key: &str, p: F) -> Resul
 where
     F: Fn(&str) -> Result<T, Error>,
 {
-    if let Some(value) = matches.value_of(key) {
+    if let Some(value) = matches.get_one::<String>(key) {
         Ok(Some(p(value).map_err(|e| {
             Error::Message(format!(
                 "invalid value for {}: {}",
@@ -455,8 +444,8 @@ impl TryFrom<clap::ArgMatches> for Config {
         let timeout = parse_from_string(&value, ARG_TIMEOUT, |s| {
             Ok(Duration::from_millis(s.parse()?))
         })?;
-        let json = value.value_of(ARG_JSON).map(|a| a.to_owned());
-        let retry_on_error = Some(value.is_present(ARG_RETRY_ON_ERROR));
+        let json = value.get_one::<String>(ARG_JSON).map(|a| a.to_owned());
+        let retry_on_error = Some(value.get_flag(ARG_RETRY_ON_ERROR));
         let try_count =
             parse_from_string(&value, ARG_TRY_COUNT, |s| s.parse().map_err(Error::from))?;
         let read_banner_size = parse_from_string(&value, ARG_READ_BANNER_SIZE, |s| {
@@ -465,8 +454,8 @@ impl TryFrom<clap::ArgMatches> for Config {
         let read_banner_timeout = parse_from_string(&value, ARG_READ_BANNER_TIMEOUT, |s| {
             Ok(Duration::from_millis(s.parse()?))
         })?;
-        let read_banner = Some(value.is_present(ARG_READ_BANNER));
-        let verbose = Some(value.is_present(ARG_VERBOSE));
+        let read_banner = Some(value.get_flag(ARG_READ_BANNER));
+        let verbose = Some(value.get_flag(ARG_VERBOSE));
 
         Ok(Config {
             target,
@@ -497,12 +486,12 @@ fn get_or_override<T, F>(
 where
     F: Fn(&str) -> Result<T, Error>,
 {
-    if matches.occurrences_of(key) > 0 {
+    if let Some(clap::parser::ValueSource::CommandLine) = matches.value_source(key) {
         // true override from command line arguments
         return parse_from_string(matches, key, p);
     }
     if val.is_none() {
-        // no vaulue set yet and no true override, see if there is default value
+        // no value set yet and no true override, see if there is default value
         // returns None if there was no default set for command line argument
         return parse_from_string(matches, key, p);
     }
@@ -581,7 +570,7 @@ impl Config {
         })?;
         let json = get_or_override(self.json, matches, ARG_JSON, |s| Ok(s.to_owned()))?;
         let retry_on_error = {
-            if matches.is_present(ARG_RETRY_ON_ERROR) {
+            if matches.get_flag(ARG_RETRY_ON_ERROR) {
                 Some(true)
             } else {
                 self.retry_on_error.or(Some(false))
@@ -591,7 +580,7 @@ impl Config {
             s.parse().map_err(Error::from)
         })?;
         let read_banner = {
-            if matches.is_present(ARG_READ_BANNER) {
+            if matches.get_flag(ARG_READ_BANNER) {
                 Some(true)
             } else {
                 self.read_banner.or(Some(false))
@@ -608,7 +597,7 @@ impl Config {
             |s| Ok(Duration::from_millis(s.parse()?)),
         )?;
         let verbose = {
-            if matches.is_present(ARG_VERBOSE) {
+            if matches.get_flag(ARG_VERBOSE) {
                 Some(true)
             } else {
                 self.verbose.or(Some(false))
