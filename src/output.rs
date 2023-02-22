@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fmt::{self, Display};
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 /// Message field value for scan complete
 const JSON_MESSAGE_SCAN_COMPLETE: &str = "scan_complete";
@@ -216,15 +217,13 @@ pub async fn write_json_into(
 
     let mut output_data = serde_json::to_string(&complete)?;
     output_data.push('\n');
-    if fname.trim() == "-" {
-        tokio::io::stdout()
-            .write_all(output_data.as_bytes())
-            .await?;
+    let mut wr: Pin<Box<dyn AsyncWrite>> = if fname.trim() == "-" {
+        Box::pin(tokio::io::stdout())
     } else {
-        let mut f = tokio::fs::File::create(fname).await?;
-        f.write_all(output_data.as_bytes()).await?;
-        f.flush().await?;
-    }
+        Box::pin(tokio::fs::File::create(fname).await?)
+    };
+    wr.write_all(output_data.as_bytes()).await?;
+    wr.flush().await?;
 
     Ok(())
 }
