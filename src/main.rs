@@ -116,7 +116,7 @@ async fn main() {
     let matches = match app.try_get_matches() {
         Ok(m) => m,
         Err(e) => match e.kind() {
-            clap::ErrorKind::DisplayHelp | clap::ErrorKind::DisplayVersion => {
+            clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                 println!("{}", e);
                 exit_error(None);
             }
@@ -124,9 +124,11 @@ async fn main() {
         },
     };
 
-    let cfg_from_file = if matches.is_present(config::ARG_CONFIG_FILE) {
+    let cfg_from_file = if matches.contains_id(config::ARG_CONFIG_FILE) {
         // First load configuration from given file
-        match config::Config::from_json_file(matches.value_of(config::ARG_CONFIG_FILE).unwrap()) {
+        match config::Config::from_json_file(
+            matches.get_one::<String>(config::ARG_CONFIG_FILE).unwrap(),
+        ) {
             Ok(c) => Some(c),
             Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
         }
