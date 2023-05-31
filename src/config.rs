@@ -21,7 +21,7 @@ pub const ARG_VERBOSE: &str = "verbose";
 pub const ARG_CONCURRENT_HOSTS: &str = "concurrent-hosts";
 
 /// Current version
-pub const PSCAN_VERSION: &str = "0.3.0-dev";
+pub const PSCAN_VERSION: &str = "0.3.0";
 
 /// Build command line arguments for the program.
 pub fn build_commandline_args() -> clap::Command {

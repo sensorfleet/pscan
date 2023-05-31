@@ -1,3 +1,6 @@
+v0.3.0 (2023-05-31)
+    * Switch async runtime from async-std to tokio
+    * Update dependencies
 v0.2.0 (2022-09-20)
     * Spread scanning to multiple hosts instead of trying to scan all ports
       on single hosts. Number of hosts to scan at the same time can be
