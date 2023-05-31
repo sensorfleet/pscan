@@ -814,7 +814,6 @@ mod tests {
                 arg: &["--ports", "22"],
                 check: Box::new(|c| {
                     let p = (0..c.ports.as_ref().unwrap().port_count() as usize)
-                        .into_iter()
                         .map(|i| c.ports.as_ref().unwrap().get(i));
                     assert_eq!(p.len(), 1);
                     let ports = p.collect::<Vec<u16>>();
@@ -933,7 +932,6 @@ mod tests {
         assert_eq!(addrs[0], IpCidr::from_str("192.168.1.0/24").unwrap());
 
         let pi = (0..cfg.ports.as_ref().unwrap().port_count() as usize)
-            .into_iter()
             .map(|i| cfg.ports.as_ref().unwrap().get(i));
         let ports = pi.collect::<Vec<u16>>();
         assert_eq!(ports.len(), 2);
