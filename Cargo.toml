@@ -7,9 +7,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap={version = "4.1"}
+clap={version = "4.3"}
 log="0.4"
-env_logger="0.9"
+env_logger="0.10"
 cidr= {version = "0.1", default-features=false}
 tokio={version="1", features=["full"]}
 serde_json = {version = "1.0"}
@@ -17,6 +17,6 @@ serde = { version="1.0", features = ["derive"]}
 signal-hook-tokio = { version="0.3", features=["futures-v0_3"]}
 signal-hook = {version="0.3"}
 futures = {version="0.3"}
-base64 = {version="0.13"}
+base64 = {version="0.21"}
 rand = {version="0.8"}
 

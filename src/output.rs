@@ -8,6 +8,8 @@ use std::pin::Pin;
 use std::time::Duration;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+use base64::prelude::Engine;
+
 /// Message field value for scan complete
 const JSON_MESSAGE_SCAN_COMPLETE: &str = "scan_complete";
 
@@ -59,7 +61,7 @@ impl Serialize for Banners {
         let mut map = serializer.serialize_map(Some(self.values.len()))?;
         for (k, v) in &self.values {
             let serialized_k = k.to_string();
-            let serialized_data = base64::encode(v);
+            let serialized_data = base64::prelude::BASE64_STANDARD_NO_PAD.encode(v);
             map.serialize_entry(&serialized_k, &serialized_data)?;
         }
         map.end()
