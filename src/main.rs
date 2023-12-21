@@ -35,8 +35,8 @@ async fn collect_results(
                     scanner::PortState::Open(d, banner) => {
                         info.add_open_port(status.port);
                         info.add_delay(d);
-                        if banner.is_some() {
-                            info.add_banner(status.port, banner.unwrap());
+                        if let Some(value) = banner {
+                            info.add_banner(status.port, value);
                         }
                     }
                     scanner::PortState::Closed(d) => {
