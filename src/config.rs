@@ -129,7 +129,7 @@ pub fn build_commandline_args() -> clap::Command {
 pub enum Error {
     Message(String),
     ParseInt(std::num::ParseIntError),
-    ParseNet(cidr::NetworkParseError),
+    ParseNet(cidr::errors::NetworkParseError),
     ParseAddr(std::net::AddrParseError),
 }
 
@@ -166,8 +166,8 @@ impl From<std::str::ParseBoolError> for Error {
     }
 }
 
-impl From<cidr::NetworkParseError> for Error {
-    fn from(e: cidr::NetworkParseError) -> Self {
+impl From<cidr::errors::NetworkParseError> for Error {
+    fn from(e: cidr::errors::NetworkParseError) -> Self {
         Error::ParseNet(e)
     }
 }
@@ -704,7 +704,7 @@ impl Config {
 mod tests {
     use std::str::FromStr;
 
-    use cidr::{Cidr, IpCidr};
+    use cidr::IpCidr;
 
     use super::*;
 

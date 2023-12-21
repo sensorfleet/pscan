@@ -1,16 +1,16 @@
 [package]
 name = "pscan"
-version = "0.3.0"
+version = "0.3.1-dev"
 authors = ["Jukka Taimisto <jtaimisto@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap={version = "4.3"}
+clap={version = "4.4"}
 log="0.4"
 env_logger="0.10"
-cidr= {version = "0.1", default-features=false}
+cidr= {version = "0.2", features=["std"]}
 tokio={version="1", features=["full"]}
 serde_json = {version = "1.0"}
 serde = { version="1.0", features = ["derive"]}
