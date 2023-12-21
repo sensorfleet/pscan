@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash, net::IpAddr};
 
-use cidr::{Cidr, IpCidr};
+use cidr::IpCidr;
 
 use crate::ports::PortRange;
 
@@ -34,7 +34,7 @@ impl ScanRange<'_> {
         return self
             .addrs
             .iter()
-            .flat_map(|cidr| cidr.iter())
+            .flat_map(|cidr| cidr.iter().addresses())
             .filter(move |a| !self.excludes.contains(a));
     }
 }
