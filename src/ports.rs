@@ -206,10 +206,7 @@ mod tests {
     fn test_simple_range(input: &str, expected: &[u16]) {
         let r = PortRange::try_from(input).unwrap();
         assert_eq!(r.port_count() as usize, expected.len());
-        check_elems(
-            (0..r.port_count() as usize).into_iter().map(|i| r.get(i)),
-            expected,
-        );
+        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), expected);
     }
 
     #[test]
