@@ -1,7 +1,9 @@
 [package]
 name = "pscan"
-version = "0.3.1-dev"
-authors = ["Jukka Taimisto <jtaimisto@gmail.com>"]
+version = "0.3.1"
+authors = ["SensorFleet R&D <rd.contact@sensorfleet.com>"]
+homepage = "https://github.com/sensorfleet/pscan"
+repository = "https://github.com/sensorfleet/pscan"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
