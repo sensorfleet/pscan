@@ -10,8 +10,6 @@ edition = "2021"
 
 [dependencies]
 clap={version = "4.4"}
-log="0.4"
-env_logger="0.10"
 cidr= {version = "0.2", features=["std"]}
 tokio={version="1", features=["full"]}
 serde_json = {version = "1.0"}
@@ -21,4 +19,6 @@ signal-hook = {version="0.3"}
 futures = {version="0.3"}
 base64 = {version="0.21"}
 rand = {version="0.8"}
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
