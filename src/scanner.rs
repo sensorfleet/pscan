@@ -375,12 +375,18 @@ impl Scanner {
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(
         self,
-        range: ScanRange<'_>,
+        mut range: ScanRange<'_>,
         tx: UnboundedSender<ScanInfo>,
     ) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
+        let mut ports = match range.ports() {
+            Some(p) => p.into_iter().collect::<Vec<u16>>(),
+            None => {
+                tracing::warn!("no ports to scan!");
+                return Ok(());
+            }
+        };
         let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
-        let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
         let mut rng = rand::thread_rng();
         ports.shuffle(&mut rng);
 

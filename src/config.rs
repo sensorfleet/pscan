@@ -813,10 +813,7 @@ mod tests {
                 name: "ports",
                 arg: &["--ports", "22"],
                 check: Box::new(|c| {
-                    let p = (0..c.ports.as_ref().unwrap().port_count() as usize)
-                        .map(|i| c.ports.as_ref().unwrap().get(i));
-                    assert_eq!(p.len(), 1);
-                    let ports = p.collect::<Vec<u16>>();
+                    let ports = c.ports.unwrap().into_iter().collect::<Vec<u16>>();
                     assert_eq!(ports.len(), 1);
                     ports[0] == 22
                 }),
@@ -931,9 +928,7 @@ mod tests {
         assert_eq!(addrs.len(), 1);
         assert_eq!(addrs[0], IpCidr::from_str("192.168.1.0/24").unwrap());
 
-        let pi = (0..cfg.ports.as_ref().unwrap().port_count() as usize)
-            .map(|i| cfg.ports.as_ref().unwrap().get(i));
-        let ports = pi.collect::<Vec<u16>>();
+        let ports = cfg.ports.unwrap().into_iter().collect::<Vec<u16>>();
         assert_eq!(ports.len(), 2);
         assert!(ports[0] == 1 && ports[1] == 2);
 

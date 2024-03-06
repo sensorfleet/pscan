@@ -1,85 +1,82 @@
+use std::collections::VecDeque;
 use std::convert::TryFrom;
-use std::fmt;
 use std::fmt::Display;
+use std::ops::RangeInclusive;
 
-/// Continuous port range.
-#[derive(Clone, PartialEq)]
-enum Prange {
-    Range((u16, u16)), // range of continous ports from min to max, inclusive
-    Atom(u16),         // signle port
-}
+/// Continuous range of one or more ports.
+#[derive(Clone, PartialEq, Debug)]
+struct Prange(RangeInclusive<u16>);
 
 impl Prange {
-    fn create(min: u16, max: u16) -> Prange {
-        if min == max {
-            Prange::Atom(min)
-        } else {
-            Prange::Range((min, max))
-        }
+    /// Creates new port range with given max and min values (inclusive)
+    fn create(min: u16, max: u16) -> Self {
+        debug_assert!(min <= max);
+        Self(min..=max)
     }
 
-    /// Get the smallest port number
+    /// Returns port range covering single port.
+    fn single(val: u16) -> Self {
+        Self(val..=val)
+    }
+
+    /// Returns the smallest port number
     fn min(&self) -> u16 {
-        match self {
-            Prange::Range((min, _max)) => *min,
-            Prange::Atom(val) => *val,
-        }
+        *self.0.start()
     }
 
-    /// Get the largest port number
+    /// Returns the largest port number
     fn max(&self) -> u16 {
-        match self {
-            Prange::Range((_min, max)) => *max,
-            Prange::Atom(val) => *val,
-        }
+        *self.0.end()
     }
 
-    /// Get the number of ports on this range
+    /// Returns the number of ports on this range
     fn count(&self) -> u16 {
-        match self {
-            Prange::Range((min, max)) => max - min + 1,
-            Prange::Atom(_) => 1,
-        }
+        self.max() - self.min() + 1
     }
 
-    // Merge this range to other, if possible. Returns merged range or None
-    // if ranges could not be merged.
-    fn merge(&self, other: &Self) -> Option<Self> {
-        let (min, max, omin, omax) = (self.min(), self.max(), other.min(), other.max());
+    /// Returns true if `val` is contained in this range
+    fn contains(&self, val: &u16) -> bool {
+        self.0.contains(val)
+    }
 
-        if max >= omin && max <= omax
-            || omax >= min && omax <= max
-            || min + 1 == omin
-            || omin + 1 == min
-            || max + 1 == omax
-            || omax + 1 == max
-            || max + 1 == omin
-            || omax + 1 == min
-        {
-            Some(Prange::create(min.min(omin), max.max(omax)))
+    /// Returns true if `other` overlaps with this range
+    fn is_overlapping(&self, other: &Self) -> bool {
+        self.contains(&other.min())
+            || self.contains(&other.max())
+            || other.contains(&self.min())
+            || other.contains(&self.max())
+    }
+
+    /// Returns true if `other` is adjacent to this range
+    fn is_adjacent(&self, other: &Self) -> bool {
+        self.max()
+            .checked_add(1)
+            .map_or(false, |v| v == other.min())
+            || other
+                .max()
+                .checked_add(1)
+                .map_or(false, |v| v == self.min())
+    }
+
+    /// Tries to merge this range with `other` returning the resulting range
+    /// if merge was possible.
+    fn try_merge(&self, other: &Self) -> Option<Self> {
+        if self.is_overlapping(other) || self.is_adjacent(other) {
+            Some(Prange::create(
+                self.min().min(other.min()),
+                self.max().max(other.max()),
+            ))
         } else {
             None
         }
     }
 }
 
-impl fmt::Debug for Prange {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Range(arg0) => write!(f, "[{}-{}]", arg0.0, arg0.1),
-            Self::Atom(arg0) => write!(f, "[{}]", arg0),
-        }
-    }
-}
-
-/// A range of ports.
-/// Implements Iterartor which returns `PortIterator` instances which can then
-/// be used to iterare the actual ports. The `PortIterator`s returned will
-/// return at maximum `step` number of ports. This allows to partition a port
-/// range into stripes of ports which can then be iterated.
+/// A (possibly non-continuous) range of ports.
 #[derive(Clone)]
 pub struct PortRange {
-    ranges: Vec<Prange>, // continuous port ranges making this range
+    /// Continuous port ranges making this range
+    ranges: Vec<Prange>,
 }
 
 /// Error returned if port range can not be parsed.
@@ -109,41 +106,56 @@ impl From<std::num::ParseIntError> for Error {
 }
 
 impl PortRange {
-    /// Get number of ports in the range
+    /// Returns the number of ports in this range
     pub fn port_count(&self) -> u16 {
-        let mut count = 0;
-        for r in &self.ranges {
-            count += r.count();
-        }
-        count
-    }
-
-    /// Get port at given index in port range.
-    /// Panics if given index is out-of-range
-    pub fn get(&self, index: usize) -> u16 {
-        if index >= self.port_count() as usize {
-            panic!("requested index out of bounds")
-        }
-        let mut curr = 0;
-        for r in &self.ranges {
-            if curr == index {
-                return r.min();
-            } else if curr + (r.count() as usize) <= index {
-                curr += r.count() as usize;
-                continue;
-            } else {
-                return r.min() + (index - curr) as u16;
-            }
-        }
-        panic!("requested index out of bounds")
-    }
-
-    pub fn port_iter(&self) -> impl Iterator<Item = u16> + '_ {
-        (0..self.port_count() as usize).map(|i| self.get(i))
+        self.ranges.iter().map(|r| r.count()).sum()
     }
 }
 
-/// Parse a single port range, min-max (inclusive).
+impl IntoIterator for PortRange {
+    type Item = u16;
+
+    type IntoIter = PortIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PortIterator {
+            ranges: self.ranges.into(),
+            iter: None,
+        }
+    }
+}
+
+/// Iterator iterating over ports in [PortRange]
+pub struct PortIterator {
+    /// Remaining ranges
+    ranges: VecDeque<Prange>,
+    /// range we are currently iterating, if any
+    iter: Option<RangeInclusive<u16>>,
+}
+
+impl Iterator for PortIterator {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(range) = self.iter.as_mut() {
+                match range.next() {
+                    Some(port) => return Some(port),
+                    None => {
+                        self.iter = None;
+                    }
+                }
+            }
+            let Some(next_range) = self.ranges.pop_front() else {
+                // no more ports
+                return None;
+            };
+            self.iter = Some(next_range.0)
+        }
+    }
+}
+
+/// Parses a single port range, min-max (inclusive).
 fn parse_single_range(val: &str) -> Result<Prange, Error> {
     let parts: Vec<&str> = val.split('-').collect();
     if parts.len() > 2 {
@@ -168,7 +180,7 @@ impl TryFrom<&str> for PortRange {
         let mut parsed_ranges = Vec::with_capacity(inputs.len());
         for s in inputs {
             if !s.contains('-') {
-                parsed_ranges.push(Prange::Atom(s.trim().parse()?));
+                parsed_ranges.push(Prange::single(s.trim().parse()?));
             } else {
                 parsed_ranges.push(parse_single_range(s.trim())?);
             }
@@ -178,7 +190,7 @@ impl TryFrom<&str> for PortRange {
         parsed_ranges.sort_unstable_by_key(|k| k.min());
         let mut curr = parsed_ranges.remove(0);
         for r in parsed_ranges.drain(0..) {
-            if let Some(merged) = curr.merge(&r) {
+            if let Some(merged) = curr.try_merge(&r) {
                 curr = merged;
             } else {
                 // could not merge current anymore, append it to final set of
@@ -206,7 +218,7 @@ mod tests {
     fn test_simple_range(input: &str, expected: &[u16]) {
         let r = PortRange::try_from(input).unwrap();
         assert_eq!(r.port_count() as usize, expected.len());
-        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), expected);
+        check_elems(r.into_iter(), expected);
     }
 
     #[test]
@@ -221,10 +233,7 @@ mod tests {
     fn test_full_range() {
         let r = PortRange::try_from("1-65535").unwrap();
         assert_eq!(r.port_count(), 65535);
-        check_elems(
-            (0..r.port_count() as usize).map(|i| r.get(i)),
-            &(1..=65535).collect::<Vec<u16>>(),
-        );
+        check_elems(r.into_iter(), &(1..=65535).collect::<Vec<u16>>());
     }
 
     #[test]
@@ -235,7 +244,7 @@ mod tests {
         expected.append(&mut (1..11).collect::<Vec<u16>>());
         expected.append(&mut (20..31).collect::<Vec<u16>>());
         expected.append(&mut (41..43).collect::<Vec<u16>>());
-        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), &expected);
+        check_elems(r.into_iter(), &expected);
     }
 
     #[test]
@@ -244,7 +253,7 @@ mod tests {
         let mut expected1 = vec![22, 80];
         expected1.append(&mut (4000..=4025).collect());
         expected1.append(&mut (8000..=8090).collect());
-        check_elems((0..r.port_count() as usize).map(|i| r.get(i)), &expected1);
+        check_elems(r.into_iter(), &expected1);
     }
 
     #[test]
@@ -254,55 +263,55 @@ mod tests {
             input: (Prange, Prange),
             expected: Option<Prange>,
         }
-        let cases: [Case; 22] = [
+        let cases: &[Case] = &[
             Case {
                 name: "same-atom",
-                input: (Prange::Atom(2), Prange::Atom(2)),
-                expected: Some(Prange::Atom(2)),
+                input: (Prange::single(2), Prange::single(2)),
+                expected: Some(Prange::single(2)),
             },
             Case {
                 name: "adjacent-atom",
-                input: (Prange::Atom(1), Prange::Atom(2)),
+                input: (Prange::single(1), Prange::single(2)),
                 expected: Some(Prange::create(1, 2)),
             },
             Case {
                 name: "adjacent-atom2",
-                input: (Prange::Atom(2), Prange::Atom(1)),
+                input: (Prange::single(2), Prange::single(1)),
                 expected: Some(Prange::create(1, 2)),
             },
             Case {
                 name: "distinct-atom",
-                input: (Prange::Atom(2), Prange::Atom(4)),
+                input: (Prange::single(2), Prange::single(4)),
                 expected: None,
             },
             Case {
                 name: "adjacent-range",
-                input: (Prange::Atom(2), Prange::create(3, 6)),
+                input: (Prange::single(2), Prange::create(3, 6)),
                 expected: Some(Prange::create(2, 6)),
             },
             Case {
                 name: "adjacent-range2",
-                input: (Prange::Atom(7), Prange::create(3, 6)),
+                input: (Prange::single(7), Prange::create(3, 6)),
                 expected: Some(Prange::create(3, 7)),
             },
             Case {
                 name: "adjacent-range3",
-                input: (Prange::create(3, 6), Prange::Atom(2)),
+                input: (Prange::create(3, 6), Prange::single(2)),
                 expected: Some(Prange::create(2, 6)),
             },
             Case {
                 name: "adjacent-range4",
-                input: (Prange::create(3, 6), Prange::Atom(7)),
+                input: (Prange::create(3, 6), Prange::single(7)),
                 expected: Some(Prange::create(3, 7)),
             },
             Case {
                 name: "atom-in-range",
-                input: (Prange::create(3, 6), Prange::Atom(5)),
+                input: (Prange::create(3, 6), Prange::single(5)),
                 expected: Some(Prange::create(3, 6)),
             },
             Case {
                 name: "atom-in-range2",
-                input: (Prange::Atom(5), Prange::create(3, 6)),
+                input: (Prange::single(5), Prange::create(3, 6)),
                 expected: Some(Prange::create(3, 6)),
             },
             Case {
@@ -365,10 +374,20 @@ mod tests {
                 input: (Prange::create(4, 8), Prange::create(4, 8)),
                 expected: Some(Prange::create(4, 8)),
             },
+            Case {
+                name: "same-max",
+                input: (Prange::create(65535, 65535), Prange::create(65535, 65535)),
+                expected: Some(Prange::create(65535, 65535)),
+            },
+            Case {
+                name: "min-max",
+                input: (Prange::create(65535, 65535), Prange::create(0, 0)),
+                expected: None,
+            },
         ];
 
         for c in cases {
-            let result = c.input.0.merge(&c.input.1);
+            let result = c.input.0.try_merge(&c.input.1);
             if result != c.expected {
                 panic!("{} : expected {:?}, got {:?}", c.name, c.expected, result)
             }
