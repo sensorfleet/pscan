@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate log;
-
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
 use std::net::IpAddr;
@@ -57,7 +54,7 @@ async fn collect_results(
             }
         }
     }
-    trace!("Collector stopping");
+    tracing::trace!("Collector stopping");
     return host_infos.drain().map(|(_, v)| v).collect();
 }
 
@@ -85,7 +82,7 @@ async fn output_results(
 fn exit_error(message: Option<String>) -> ! {
     let mut code = 0;
     if let Some(msg) = message {
-        error!("{}", msg);
+        tracing::error!("{}", msg);
         code = 127;
     }
 
@@ -99,17 +96,23 @@ async fn sighandler(signals: Signals, flag: Arc<AtomicBool>) {
     while let Some(sig) = s.next().await {
         match sig {
             SIGINT | SIGTERM => {
-                debug!("Received termination signal, setting flag");
+                tracing::debug!("Received termination signal, setting flag");
                 flag.store(true, std::sync::atomic::Ordering::SeqCst);
             }
-            _ => warn!("Received unexpected signal"),
+            _ => tracing::warn!("Received unexpected signal"),
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    #[cfg(debug_assertions)]
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    #[cfg(not(debug_assertions))]
+    tracing_subscriber::fmt::init();
 
     let app = config::build_commandline_args();
 
@@ -157,7 +160,7 @@ async fn main() {
     let params: scanner::ScanParameters = cfg.as_params();
 
     if params.retry_on_error {
-        info!("Retry on error set")
+        tracing::info!("Retry on error set")
     }
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -182,14 +185,14 @@ async fn main() {
             // fatal error, results can not be trusted.
             exit_error(Some(e.to_string()));
         } else {
-            error!("Error while scanning: {}", e);
+            tracing::error!("Error while scanning: {}", e);
         }
     }
     match col_result {
         Ok(infos) => {
             // print results now that scan is complete
             if let Err(er) = output_results(&infos, number_of_ports, cfg.json()).await {
-                error!("Unable to output results: {}", er);
+                tracing::error!("Unable to output results: {}", er);
             }
         }
         Err(error) => {
@@ -197,12 +200,12 @@ async fn main() {
         }
     };
     handle.close();
-    debug!(
+    tracing::debug!(
         "Waiting for sighandler task, stop is {}",
         stop.load(std::sync::atomic::Ordering::SeqCst)
     );
     if let Err(e) = sig_h.await {
-        warn!("signal handler error: {}", e);
+        tracing::warn!("signal handler error: {}", e);
     }
     if stop.load(std::sync::atomic::Ordering::SeqCst) {
         std::process::exit(2);

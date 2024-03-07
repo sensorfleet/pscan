@@ -6,7 +6,7 @@ use crate::ports::PortRange;
 
 ///ScanRnge contains information which hosts and ports on those hosts to scan
 pub struct ScanRange<'a> {
-    pub ports: PortRange,
+    ports: Option<PortRange>,
     addrs: &'a [IpCidr],
     excludes: &'a [IpAddr],
 }
@@ -17,25 +17,31 @@ impl<'a> ScanRange<'a> {
     pub fn create(addrs: &'a [IpCidr], excludes: &'a [IpAddr], ports: PortRange) -> ScanRange<'a> {
         ScanRange {
             addrs,
-            ports,
+            ports: Some(ports),
             excludes,
         }
     }
 
     /// Get the number of ports to scan on each host
     pub fn get_port_count(&self) -> u16 {
-        self.ports.port_count()
+        match self.ports {
+            None => 0,
+            Some(ref p) => p.port_count(),
+        }
+    }
+
+    pub fn ports(&mut self) -> Option<PortRange> {
+        self.ports.take()
     }
 }
 
 impl ScanRange<'_> {
     /// Get iterator for hosts to scan
     pub fn hosts(&'_ self) -> impl Iterator<Item = IpAddr> + '_ {
-        return self
-            .addrs
+        self.addrs
             .iter()
             .flat_map(|cidr| cidr.iter().addresses())
-            .filter(move |a| !self.excludes.contains(a));
+            .filter(move |a| !self.excludes.contains(a))
     }
 }
 

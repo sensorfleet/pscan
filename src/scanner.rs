@@ -101,7 +101,7 @@ fn handle_other_error(
             os_errcodes::OS_ERR_NET_UNREACH => Ok(PortState::NetError()),
             os_errcodes::OS_ERR_TOO_MANY_FILES => Err(ScanError::TooManyFiles()),
             _ => {
-                debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
+                tracing::debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
                 Ok(PortState::Closed(connection_time))
             }
         })
@@ -115,6 +115,7 @@ fn handle_other_error(
 /// The handler should terminate the connection if it should not be left
 /// open. Callback context is used because Rust does not support async closures
 /// yet. Data returned by callback is included in PortState::Open returned.
+#[tracing::instrument(skip(handler, context))]
 async fn try_port<F, C, Fut>(
     sa: SocketAddr,
     conn_timeout: Duration,
@@ -125,7 +126,7 @@ where
     F: FnOnce(TcpStream, C) -> Fut,
     Fut: Future<Output = Option<Vec<u8>>>,
 {
-    trace!("Trying {:}", sa);
+    tracing::trace!("connecting");
     let start = Instant::now();
     let res = tokio::time::timeout(conn_timeout, TcpStream::connect(sa)).await;
     let c_time = start.elapsed();
@@ -133,22 +134,20 @@ where
     let c = match res {
         Ok(v) => v,
         Err(_) => {
-            trace!("Connection timed out");
+            tracing::trace!("Connection timed out");
             return Ok(PortState::Timeout(c_time));
         }
     };
-
-    trace!("connect() took {}ms", c_time.as_millis());
+    tracing::trace!("connect() took {}ms", c_time.as_millis());
 
     match c {
         Ok(s) => {
-            info!("Connection to {} succesfull", sa);
+            tracing::trace!("connection successful");
             let data = handler(s, context).await;
-            info!("Connection took {}ms", c_time.as_millis());
             Ok(PortState::Open(c_time, data))
         }
         Err(e) => {
-            trace!("Connection to {} failed: {}", sa, e);
+            tracing::trace!(?e, "connection failed");
             match e.kind() {
                 ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
@@ -175,7 +174,7 @@ pub enum ScanType {
 /// Always returns None
 async fn close_connection(mut s: TcpStream, _how: Shutdown) -> Option<Vec<u8>> {
     if let Err(error) = s.shutdown().await {
-        warn!("Can not shut down connection: {}", error);
+        tracing::warn!("Can not shut down connection: {}", error);
     }
     None
 }
@@ -189,15 +188,14 @@ struct RdParms {
 /// `try_port()` callback that can be used to read banner from open TCP port
 async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
     let mut buf = vec![0; p.size];
-    info!(
-        "Trying to read {} bytes of banner from {:?} with {}ms timeout",
+    tracing::info!(
+        "Trying to read {} bytes of banner with {}ms timeout",
         p.size,
-        s.peer_addr().unwrap(),
         p.timeout.as_millis()
     );
 
     let ret = tokio::time::timeout(p.timeout, s.read(&mut buf)).await;
-    info!("Read returned {:?}", ret);
+    tracing::info!("Read returned {:?}", ret);
     let r = match ret {
         Ok(Ok(0)) => None,
         Ok(Ok(len)) => {
@@ -205,7 +203,7 @@ async fn read_banner(mut s: TcpStream, p: RdParms) -> Option<Vec<u8>> {
             Some(buf)
         }
         Ok(Err(e)) => {
-            warn!("Error while reading data from {:?}: {}", s.peer_addr(), e);
+            tracing::warn!("Error while reading data from {:?}: {}", s.peer_addr(), e);
             None
         }
         Err(_) => None,
@@ -224,6 +222,7 @@ impl ScanType {
     ///
     /// The result of scanning is sent using `tx` `Sender`. Returned time,
     /// if present, indicates how long it took to get response from host.
+    #[tracing::instrument(skip(self, tx, conn_timeout, retry_on_error, try_count))]
     async fn cycle(
         &self,
         sa: SocketAddr,
@@ -257,15 +256,16 @@ impl ScanType {
                     if nr_of_tries >= try_count {
                         Ok(None)
                     } else {
-                        debug!(
-                            "Retrying {} due to timeout, tried {}/{}",
-                            sa, nr_of_tries, try_count
+                        tracing::debug!(
+                            "Retrying due to timeout, tried {}/{}",
+                            nr_of_tries,
+                            try_count
                         );
                         continue;
                     }
                 }
                 PortState::HostDown() => {
-                    info!("Remote host {} is down", sa.ip());
+                    tracing::info!("Host down");
                     Err(ScanError::Down(format!("Host {} is down", sa.ip())))
                 }
                 PortState::NetError() => {
@@ -282,9 +282,10 @@ impl ScanType {
                             try_count
                         )))
                     } else {
-                        info!(
+                        tracing::info!(
                             "waiting 500ms before next retry ({}/{} tries)",
-                            nr_of_tries, try_count
+                            nr_of_tries,
+                            try_count
                         );
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         continue;
@@ -296,7 +297,7 @@ impl ScanType {
                 port: sa.port(),
                 state,
             })) {
-                warn!("Result channel closed!")
+                tracing::warn!("Result channel closed!")
             }
             return ret;
         }
@@ -374,12 +375,18 @@ impl Scanner {
     /// Do a scan for given range. Results will be sent using `tx` `Sender`.
     pub async fn scan(
         self,
-        range: ScanRange<'_>,
+        mut range: ScanRange<'_>,
         tx: UnboundedSender<ScanInfo>,
     ) -> Result<(), ScanError> {
         let atx = Arc::new(tx);
+        let mut ports = match range.ports() {
+            Some(p) => p.into_iter().collect::<Vec<u16>>(),
+            None => {
+                tracing::warn!("no ports to scan!");
+                return Ok(());
+            }
+        };
         let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
-        let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
         let mut rng = rand::thread_rng();
         ports.shuffle(&mut rng);
 
@@ -399,11 +406,11 @@ impl Scanner {
                     .map(|h| SocketAddr::new(*h, *port))
                 {
                     let Ok(handle) = self.sem.clone().acquire_owned().await else {
-                        warn!("Semaphore closed");
+                        tracing::warn!("Semaphore closed");
                         break 'outer;
                     };
                     if self.stop.load(Ordering::SeqCst) {
-                        warn!("Stopping scanning due to signal");
+                        tracing::warn!("Stopping scanning due to signal");
                         drop(handle);
                         break 'outer;
                     }
@@ -420,16 +427,19 @@ impl Scanner {
                         drop(handle);
                         if let Err(e) = ret {
                             if !e.is_fatal() {
-                                trace!("Marking host {} down", sa.ip());
+                                tracing::trace!("Marking host {} down", sa.ip());
                                 if d_map.lock().await.remove(&sa.ip()) {
                                     if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
-                                        warn!("Unable to send host scanned indication: {}", e);
+                                        tracing::warn!(
+                                            "Unable to send host scanned indication: {}",
+                                            e
+                                        );
                                     }
                                 }
                             } else {
-                                info!("stopping due to fatal error while scanning");
+                                tracing::info!("stopping due to fatal error while scanning");
                                 if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
-                                    warn!("Unable to send host scanned indication: {}", e);
+                                    tracing::warn!("Unable to send host scanned indication: {}", e);
                                 }
                                 let mut ret = r.lock().unwrap();
                                 *ret = Some(e);
@@ -437,18 +447,18 @@ impl Scanner {
                             }
                         } else if is_last {
                             if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
-                                warn!("Unable to send host scanned indication: {}", e);
+                                tracing::warn!("Unable to send host scanned indication: {}", e);
                             }
                         }
                     });
                 }
             }
         }
-        debug!("waiting for all tasks to complete");
+        tracing::debug!("waiting for all tasks to complete");
         while self.sem.available_permits() < self.params.concurrent_scans {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        info!("Tasks completed");
+        tracing::info!("Tasks completed");
         let r = rv.lock().unwrap().take();
         match r {
             Some(e) => Err(e),
