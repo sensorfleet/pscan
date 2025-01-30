@@ -380,7 +380,7 @@ impl Scanner {
         let atx = Arc::new(tx);
         let host_chunks = ChunkIter::new(range.hosts(), self.params.concurrent_hosts);
         let mut ports = range.ports.port_iter().collect::<Vec<u16>>();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         ports.shuffle(&mut rng);
 
         // return value, this gets set from task if fatal error occurs and w
