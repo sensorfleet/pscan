@@ -70,11 +70,7 @@ where
                 None => break,
             };
         }
-        if ret.is_empty() {
-            None
-        } else {
-            Some(ret)
-        }
+        if ret.is_empty() { None } else { Some(ret) }
     }
 }
 

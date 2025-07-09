@@ -636,8 +636,7 @@ impl Config {
         if let Some(c) = self.concurrent_scans {
             if c == 0 {
                 return Err(Error::Message(format!(
-                    "invalid value for {}: Value needs to be non-zero",
-                    ARG_CONCURRENT_SCANS
+                    "invalid value for {ARG_CONCURRENT_SCANS}: Value needs to be non-zero"
                 )));
             }
         } else {
@@ -646,16 +645,14 @@ impl Config {
         if let Some(h) = self.concurrent_hosts {
             if h == 0 {
                 return Err(Error::Message(format!(
-                    "invalid value for {}: Value needs to be non-zero",
-                    ARG_CONCURRENT_HOSTS
+                    "invalid value for {ARG_CONCURRENT_HOSTS}: Value needs to be non-zero"
                 )));
             }
         }
         if let Some(c) = self.try_count {
             if c == 0 {
                 return Err(Error::Message(format!(
-                    "invalid value for {}: value needs to be non-zero",
-                    ARG_TRY_COUNT
+                    "invalid value for {ARG_TRY_COUNT}: value needs to be non-zero"
                 )));
             }
         } else {
@@ -678,8 +675,7 @@ impl Config {
             let fields = missing_fields.join(", ");
 
             return Err(Error::Message(format!(
-                "missing configuration values for: {}",
-                fields
+                "missing configuration values for: {fields}"
             )));
         }
         Ok(())
@@ -690,12 +686,11 @@ impl Config {
         let p = Path::new(file_name);
         if !p.exists() {
             return Err(Error::Message(format!(
-                "configuration file {} not found",
-                file_name
+                "configuration file {file_name} not found"
             )));
         }
         let data = fs::read_to_string(p)
-            .map_err(|e| Error::Message(format!("unable to read configuration file: {}", e)))?;
+            .map_err(|e| Error::Message(format!("unable to read configuration file: {e}")))?;
         serde_json::from_str(&data).map_err(|e| Error::Message(e.to_string()))
     }
 }

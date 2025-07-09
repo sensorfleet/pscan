@@ -5,8 +5,8 @@ use std::io::ErrorKind;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc::UnboundedSender;
 
 use std::net::{IpAddr, Shutdown, SocketAddr};
 use std::sync::atomic::Ordering;
@@ -42,9 +42,9 @@ static DEFAULT_CONNECTION_TIMEOUT: Duration = Duration::from_millis(2000);
 pub enum PortState {
     Open(Duration, Option<Vec<u8>>), // port is open, contains banner if we did read any
     Closed(Duration),                // port is closed
-    Timeout(Duration),               // Did not get response withint timeout
-    HostDown(),                      // Host was reported unreachable by OS
-    NetError(),                      // Host could not be connected due network error
+    Timeout,                         // Did not get response withint timeout
+    HostDown,                        // Host was reported unreachable by OS
+    NetError,                        // Host could not be connected due network error
 }
 
 /// Scanning error
@@ -65,7 +65,7 @@ impl ScanError {
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ScanError::Down(msg) => write!(f, "{}", msg),
+            ScanError::Down(msg) => write!(f, "{msg}"),
             ScanError::TooManyFiles() => write!(
                 f,
                 "Too many concurrent scans. Decrease number of concurrent scans, \
@@ -97,8 +97,8 @@ fn handle_other_error(
 ) -> Result<PortState, ScanError> {
     e.raw_os_error()
         .map_or(Ok(PortState::Closed(connection_time)), |n| match n {
-            os_errcodes::OS_ERR_HOST_DOWN => Ok(PortState::HostDown()),
-            os_errcodes::OS_ERR_NET_UNREACH => Ok(PortState::NetError()),
+            os_errcodes::OS_ERR_HOST_DOWN => Ok(PortState::HostDown),
+            os_errcodes::OS_ERR_NET_UNREACH => Ok(PortState::NetError),
             os_errcodes::OS_ERR_TOO_MANY_FILES => Err(ScanError::TooManyFiles()),
             _ => {
                 tracing::debug!("Connect returned error code: {} (kind {:?})", n, e.kind());
@@ -135,7 +135,7 @@ where
         Ok(v) => v,
         Err(_) => {
             tracing::trace!("Connection timed out");
-            return Ok(PortState::Timeout(c_time));
+            return Ok(PortState::Timeout);
         }
     };
     tracing::trace!("connect() took {}ms", c_time.as_millis());
@@ -149,9 +149,9 @@ where
         Err(e) => {
             tracing::trace!(?e, "connection failed");
             match e.kind() {
-                ErrorKind::TimedOut => Ok(PortState::Timeout(c_time)),
+                ErrorKind::TimedOut => Ok(PortState::Timeout),
                 ErrorKind::ConnectionRefused => Ok(PortState::Closed(c_time)),
-                ErrorKind::PermissionDenied => Ok(PortState::HostDown()),
+                ErrorKind::PermissionDenied => Ok(PortState::HostDown),
                 _ => handle_other_error(e, c_time),
             }
         }
@@ -247,12 +247,12 @@ impl ScanType {
                 }
                 ScanType::Test(m) => {
                     let mut val = m.lock().unwrap();
-                    val.remove(&sa).unwrap_or(Ok(PortState::HostDown()))?
+                    val.remove(&sa).unwrap_or(Ok(PortState::HostDown))?
                 }
             };
             let ret = match state {
                 PortState::Open(d, _) | PortState::Closed(d) => Ok(Some(d)),
-                PortState::Timeout(_) => {
+                PortState::Timeout => {
                     if nr_of_tries >= try_count {
                         Ok(None)
                     } else {
@@ -264,11 +264,11 @@ impl ScanType {
                         continue;
                     }
                 }
-                PortState::HostDown() => {
+                PortState::HostDown => {
                     tracing::info!("Host down");
                     Err(ScanError::Down(format!("Host {} is down", sa.ip())))
                 }
-                PortState::NetError() => {
+                PortState::NetError => {
                     if !retry_on_error {
                         Err(ScanError::Down(format!(
                             "Host {}, network error, marking down",

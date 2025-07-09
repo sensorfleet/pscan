@@ -1,7 +1,7 @@
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook_tokio::Signals;
 use std::net::IpAddr;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use futures::StreamExt;
@@ -40,9 +40,9 @@ async fn collect_results(
                         info.add_closed_port(status.port);
                         info.add_delay(d);
                     }
-                    scanner::PortState::Timeout(_) => info.add_filtered_port(status.port),
-                    scanner::PortState::HostDown() => info.mark_down(),
-                    scanner::PortState::NetError() => info.mark_down(),
+                    scanner::PortState::Timeout => info.add_filtered_port(status.port),
+                    scanner::PortState::HostDown => info.mark_down(),
+                    scanner::PortState::NetError => info.mark_down(),
                 }
             }
             scanner::ScanInfo::HostScanned(addr) => {
@@ -55,7 +55,7 @@ async fn collect_results(
         }
     }
     tracing::trace!("Collector stopping");
-    return host_infos.drain().map(|(_, v)| v).collect();
+    host_infos.into_values().collect()
 }
 
 /// Print the results, if `output_file` is `None`, then information is printed
@@ -123,7 +123,7 @@ async fn main() {
         Ok(m) => m,
         Err(e) => match e.kind() {
             clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
-                println!("{}", e);
+                println!("{e}");
                 exit_error(None);
             }
             _ => exit_error(Some(e.to_string())),
@@ -136,7 +136,7 @@ async fn main() {
             matches.get_one::<String>(config::ARG_CONFIG_FILE).unwrap(),
         ) {
             Ok(c) => Some(c),
-            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
+            Err(e) => exit_error(Some(format!("Configuration error: {e}"))),
         }
     } else {
         None
@@ -144,19 +144,19 @@ async fn main() {
 
     let cfg = if let Some(cf) = cfg_from_file {
         match cf.override_with(&matches) {
-            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
+            Err(e) => exit_error(Some(format!("Configuration error: {e}"))),
             Ok(c) => c,
         }
     } else {
         match config::Config::try_from(matches) {
-            Err(e) => exit_error(Some(format!("Configuration error: {}", e))),
+            Err(e) => exit_error(Some(format!("Configuration error: {e}"))),
             Ok(c) => c,
         }
     };
 
     // make sure configuration is good
     if let Err(e) = cfg.verify() {
-        exit_error(Some(format!("Configuration error: {}", e)))
+        exit_error(Some(format!("Configuration error: {e}")))
     }
 
     let verbose = cfg.verbose();
@@ -170,7 +170,7 @@ async fn main() {
 
     let signals = match Signals::new([SIGINT, SIGTERM]) {
         Ok(h) => h,
-        Err(e) => exit_error(Some(format!("Unable to register signal handler: {}", e))),
+        Err(e) => exit_error(Some(format!("Unable to register signal handler: {e}"))),
     };
     let stop = Arc::new(AtomicBool::new(false));
     let handle = signals.handle();
@@ -188,14 +188,14 @@ async fn main() {
             // fatal error, results can not be trusted.
             exit_error(Some(e.to_string()));
         } else {
-            tracing::error!("Error while scanning: {}", e);
+            tracing::error!("Error while scanning: {e}");
         }
     }
     match col_result {
         Ok(infos) => {
             // print results now that scan is complete
             if let Err(er) = output_results(&infos, number_of_ports, cfg.json()).await {
-                tracing::error!("Unable to output results: {}", er);
+                tracing::error!("Unable to output results: {er}");
             }
         }
         Err(error) => {

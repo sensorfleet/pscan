@@ -1,5 +1,5 @@
-use serde::ser::SerializeMap;
 use serde::Serialize;
+use serde::ser::SerializeMap;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fmt::{self, Display};
@@ -45,11 +45,11 @@ impl Display for Banners {
         builder.push_str("\n\t Banners received from open ports:\n");
         for (port, b) in &self.values {
             let _ = match std::str::from_utf8(b) {
-                Ok(s) => write!(builder, "\t\tPort: {} \"{}\"", port, s),
+                Ok(s) => write!(builder, "\t\tPort: {port} \"{s}\""),
                 Err(_e) => write!(builder, "\t\tPort: {}: {} bytes of data", port, b.len()),
             };
         }
-        write!(f, "{}", builder)
+        write!(f, "{builder}")
     }
 }
 
@@ -155,13 +155,7 @@ impl HostInfo {
 impl fmt::Display for HostInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut pstr = String::new();
-        let status = {
-            if self.down {
-                "Down"
-            } else {
-                "Up"
-            }
-        };
+        let status = { if self.down { "Down" } else { "Up" } };
         let _ = write!(
             pstr,
             "{} is {} \n\t{} Open Ports:",
@@ -170,7 +164,7 @@ impl fmt::Display for HostInfo {
             self.open_ports.len()
         );
         for port in &self.open_ports {
-            let _ = write!(pstr, " {}", port);
+            let _ = write!(pstr, " {port}");
         }
         let _ = write!(
             pstr,
@@ -188,7 +182,7 @@ impl fmt::Display for HostInfo {
         if !self.banners.is_empty() {
             pstr.push_str(&self.banners.to_string());
         }
-        write!(f, "{}", pstr)
+        write!(f, "{pstr}")
     }
 }
 /// `ScanComplete` information to print as JSON. Contains the results of
@@ -249,11 +243,10 @@ pub fn write_results_to_stdout(
             number_of_silent_hosts += 1;
             continue;
         }
-        println!("{}\n", info);
+        println!("{info}\n");
     }
     println!(
-        "{} ports on {} hosts scanned, {} hosts did not have open ports, {} hosts reported down by OS",
-        number_of_ports, number_of_hosts, number_of_silent_hosts, number_of_down_hosts
+        "{number_of_ports} ports on {number_of_hosts} hosts scanned, {number_of_silent_hosts} hosts did not have open ports, {number_of_down_hosts} hosts reported down by OS"
     );
     Ok(())
 }
@@ -266,6 +259,6 @@ pub fn write_single_host_info(info: &HostInfo) {
     } else if info.open_port_count() == 0 {
         println!("{}: no open ports", info.address)
     } else {
-        println!("{}", info)
+        println!("{info}")
     }
 }

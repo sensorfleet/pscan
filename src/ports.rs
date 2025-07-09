@@ -49,13 +49,8 @@ impl Prange {
 
     /// Returns true if `other` is adjacent to this range
     fn is_adjacent(&self, other: &Self) -> bool {
-        self.max()
-            .checked_add(1)
-            .map_or(false, |v| v == other.min())
-            || other
-                .max()
-                .checked_add(1)
-                .map_or(false, |v| v == self.min())
+        self.max().checked_add(1).is_some_and(|v| v == other.min())
+            || other.max().checked_add(1).is_some_and(|v| v == self.min())
     }
 
     /// Tries to merge this range with `other` returning the resulting range
@@ -100,7 +95,7 @@ impl From<&str> for Error {
 impl From<std::num::ParseIntError> for Error {
     fn from(err: std::num::ParseIntError) -> Self {
         Error {
-            msg: format!("Invalid number in port range: {}", err),
+            msg: format!("Invalid number in port range: {err}"),
         }
     }
 }
