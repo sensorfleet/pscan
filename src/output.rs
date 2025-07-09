@@ -42,11 +42,20 @@ struct Banners {
 impl Display for Banners {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = String::new();
-        builder.push_str("\n\t Banners received from open ports:\n");
+        builder.push_str("\n\tBanners received from open ports:\n");
         for (port, b) in &self.values {
             let _ = match std::str::from_utf8(b) {
-                Ok(s) => write!(builder, "\t\tPort: {port} \"{s}\""),
-                Err(_e) => write!(builder, "\t\tPort: {}: {} bytes of data", port, b.len()),
+                Ok(s) => {
+                    let pretty: String = s
+                        .chars()
+                        .map(|c| match c.is_control() {
+                            true => '\u{00b7}',
+                            false => c,
+                        })
+                        .collect();
+                    writeln!(builder, "\t\tPort: {port} \"{pretty}\"")
+                }
+                Err(_e) => writeln!(builder, "\t\tPort: {}: {} bytes of data", port, b.len()),
             };
         }
         write!(f, "{builder}")
