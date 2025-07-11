@@ -4,14 +4,12 @@ version = "0.3.1"
 authors = ["SensorFleet R&D <rd.contact@sensorfleet.com>"]
 homepage = "https://github.com/sensorfleet/pscan"
 repository = "https://github.com/sensorfleet/pscan"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 clap={version = "4.4"}
-log="0.4"
-env_logger="0.11"
 cidr= {version = "0.3", features=["std"]}
 tokio={version="1", features=["full"]}
 serde_json = {version = "1.0"}
@@ -21,4 +19,6 @@ signal-hook = {version="0.3"}
 futures = {version="0.3"}
 base64 = "0.22"
 rand = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
