@@ -1,6 +1,6 @@
 [package]
 name = "pscan"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["SensorFleet R&D <rd.contact@sensorfleet.com>"]
 homepage = "https://github.com/sensorfleet/pscan"
 repository = "https://github.com/sensorfleet/pscan"
