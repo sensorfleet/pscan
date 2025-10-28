@@ -46,10 +46,8 @@ async fn collect_results(
                 }
             }
             scanner::ScanInfo::HostScanned(addr) => {
-                if verbose {
-                    if let Some(info) = host_infos.get(&addr) {
-                        output::write_single_host_info(info)
-                    }
+                if verbose && let Some(info) = host_infos.get(&addr) {
+                    output::write_single_host_info(info)
                 }
             }
         }
