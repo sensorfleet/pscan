@@ -428,13 +428,10 @@ impl Scanner {
                         if let Err(e) = ret {
                             if !e.is_fatal() {
                                 tracing::trace!("Marking host {} down", sa.ip());
-                                if d_map.lock().await.remove(&sa.ip()) {
-                                    if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
-                                        tracing::warn!(
-                                            "Unable to send host scanned indication: {}",
-                                            e
-                                        );
-                                    }
+                                if d_map.lock().await.remove(&sa.ip())
+                                    && let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip()))
+                                {
+                                    tracing::warn!("Unable to send host scanned indication: {}", e);
                                 }
                             } else {
                                 tracing::info!("stopping due to fatal error while scanning");
@@ -445,10 +442,8 @@ impl Scanner {
                                 *ret = Some(e);
                                 s.store(true, Ordering::SeqCst);
                             }
-                        } else if is_last {
-                            if let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
-                                tracing::warn!("Unable to send host scanned indication: {}", e);
-                            }
+                        } else if is_last && let Err(e) = tx.send(ScanInfo::HostScanned(sa.ip())) {
+                            tracing::warn!("Unable to send host scanned indication: {}", e);
                         }
                     });
                 }

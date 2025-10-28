@@ -523,7 +523,7 @@ impl Config {
 
     // Get ScanRange from configuration values.
     // If `verify()` has been called this method will not return `None`
-    pub fn get_range(&self) -> Option<range::ScanRange> {
+    pub fn get_range(&self) -> Option<range::ScanRange<'_>> {
         Some(range::ScanRange::create(
             &self.target,
             &self.exclude,
@@ -642,12 +642,12 @@ impl Config {
         } else {
             missing_fields.push(ARG_CONCURRENT_SCANS);
         }
-        if let Some(h) = self.concurrent_hosts {
-            if h == 0 {
-                return Err(Error::Message(format!(
-                    "invalid value for {ARG_CONCURRENT_HOSTS}: Value needs to be non-zero"
-                )));
-            }
+        if let Some(h) = self.concurrent_hosts
+            && h == 0
+        {
+            return Err(Error::Message(format!(
+                "invalid value for {ARG_CONCURRENT_HOSTS}: Value needs to be non-zero"
+            )));
         }
         if let Some(c) = self.try_count {
             if c == 0 {
