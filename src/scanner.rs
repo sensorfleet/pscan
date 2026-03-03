@@ -341,11 +341,10 @@ impl Scanner {
     /// Create new scanner with given parameters.
     /// The `stop` flag can be used to stop ongoing scan.
     pub fn create(params: ScanParameters, stop: Arc<AtomicBool>) -> Scanner {
-        let t = if params.read_banner_timeout.is_some() && params.read_banner_size.is_some() {
-            ScanType::TcpBanner(
-                params.read_banner_size.unwrap(),
-                params.read_banner_timeout.unwrap(),
-            )
+        let t = if let Some(banner_timeout) = params.read_banner_timeout
+            && let Some(banner_size) = params.read_banner_size
+        {
+            ScanType::TcpBanner(banner_size, banner_timeout)
         } else {
             ScanType::Tcp
         };
